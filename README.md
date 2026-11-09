@@ -1,2 +1,72 @@
-# seoul-aed-walk-access
-Seoul AED walking access analysis with Valhalla, PostGIS and FastAPI
+# 실보행 경로 기반 AED 접근성 분석 시스템
+
+서울시 내 AED까지 실제로 걸어서 4분 안에 닿을 수 있는지를 실제 보행 경로와 운영시간으로 분석해,
+AED 사각지대와 가장 빨리 닿는 AED까지의 경로를 지도로 보여주는 웹서비스입니다.
+
+<!--![화면 캡처](docs/screenshot.png)-->
+
+> 이 서비스는 119 신고를 대신하지 않는 분석·참고용 도구입니다.
+
+## 목차
+- [배경](#배경) · [주요 기능](#주요-기능) · [시스템 구조](#시스템-구조) · [설치](#설치)
+- [실행](#실행) · [분석 결과](#분석-결과) · [한계](#한계) · [팀](#팀) · [라이선스](#라이선스)
+
+## 배경
+직선거리 기반 분석의 한계와 이 프로젝트가 다른 점 (2~3문장)
+
+## 주요 기능
+- 가장 가까운 AED 도보 경로 안내
+- 자치구별 도달 가능 비율과 사각지대 지도
+- 직선거리 vs 실보행 비교
+- 운영시간 기반 실시간 반영, AED 위치 오류 제보
+
+## 시스템 구조
+<!--![아키텍처](docs/architecture.png)-->
+
+| 구분 | 사용 오픈소스 | 역할 |
+| --- | --- | --- |
+| 경로 탐색 | Valhalla | 등시선·도보 경로 계산 |
+| ... | ... | ... |
+
+### 폴더 구조
+(0-2의 폴더 트리)
+
+## 설치
+### 요구사항
+- Ubuntu 24.04, Docker + Docker Compose, osmium-tool
+- 메모리 8GB 이상 권장
+
+### 준비
+1. 저장소 받기: `git clone ...`
+2. 서울 지도 준비: (1-1의 명령)
+3. 환경변수: `cp .env.example .env` 후 API 키 입력
+
+## 실행
+```bash
+docker compose up -d --build
+docker compose run --rm pipeline
+```
+브라우저에서 http://localhost 접속. 배포 방법은 [docs/deploy.md](docs/deploy.md)
+
+## 분석 결과
+분석 조건(config.yaml)과 핵심 수치, 그래프 (results/)
+
+## 한계
+OSM 보행로 완성도, 건물 내부 이동 미반영, AED 데이터 오류 가능성
+
+## 팀
+| 이름 | 역할 |
+| --- | --- |
+| ○○○ | 데이터·분석 |
+| ○○○ | 서비스·배포 |
+
+## 기여 방법
+브랜치·커밋·PR 규칙 (CONTRIBUTING.md 또는 docs/commit-convention.md 참고)
+
+## 데이터 출처
+- © OpenStreetMap contributors (ODbL 1.0), 기준일 YYYY-MM-DD
+- 국립중앙의료원 전국 AED 정보 조회 서비스 (공공데이터포털), 수집일 YYYY-MM-DD
+
+## 라이선스
+이 저장소는 MIT 라이선스를 따릅니다. 사용한 오픈소스의 라이선스는 아래와 같습니다.
+(PRD 8-4 라이선스 표)
