@@ -1,3 +1,6 @@
+prd.md
+guideline.pdf
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -218,3 +221,63 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ============================================================
+# Project: seoul-aed-walk-access
+# ============================================================
+
+# 환경변수 (API 키, DB 비밀번호) — 예시 파일만 올림
+.env.*
+!.env.example
+
+# Valhalla: 서울 OSM 지도 + 가공된 타일 (용량 큼, 재생성 가능)
+valhalla/custom_files/*
+!valhalla/custom_files/.gitkeep
+*.osm.pbf
+valhalla_tiles.tar
+
+# 데이터: API 원본 응답, 정제 결과 (재생성 가능)
+data/*
+!data/raw/
+!data/clean/
+data/raw/*
+data/clean/*
+!data/raw/.gitkeep
+!data/clean/.gitkeep
+
+# 자치구 경계 원본 파일 (SGIS / OSM 행정경계)
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+
+# DB 덤프 (pg_dump -Fc 로 서버에 옮기는 파일)
+*.dump
+*.sql.gz
+*.backup
+
+# Valhalla 연습 요청 결과 (1단계 curl 출력)
+iso.geojson
+
+# HTTPS 인증서·키 (7-4 선택 단계)
+*.pem
+*.key
+*.crt
+letsencrypt/
+
+# QGIS 임시/백업 파일
+*.qgs~
+*.qgz~
+*.qgd
+
+# 에디터 / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+*:Zone.Identifier
