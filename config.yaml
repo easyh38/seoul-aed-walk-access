@@ -1,0 +1,27 @@
+project:
+  name: seoul-aed-walk-access
+
+paths:
+  aed_csv: data/clean/aed.csv
+  output_dir: results/isochrones
+  output_jsonl: results/isochrones/aed_isochrones.jsonl
+  failures_csv: results/isochrones/isochrone_failures.csv
+  summary_json: results/isochrones/run_summary.json
+
+valhalla:
+  base_url: "http://localhost:8002"
+  isochrone_endpoint: "/isochrone"
+  costing: pedestrian
+  walking_speed_kmh: 5.1
+  polygons: true
+  timeout_seconds: 120
+
+analysis:
+  contours_minutes:
+    - 2
+    - 4
+  test_limit: 5
+  max_retries: 3
+  retry_delay_seconds: 2
+  request_interval_seconds: 0.1
+  resume: true
