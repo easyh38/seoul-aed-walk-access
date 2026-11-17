@@ -1,0 +1,7 @@
+# 4단계 백엔드(FastAPI) 패키지
+# 설치: pip install -r api/requirements.txt
+fastapi==0.163.1
+uvicorn==0.54.0
+SQLAlchemy==2.1.9
+psycopg2-binary==2.9.13
+python-dotenv==1.2.4
