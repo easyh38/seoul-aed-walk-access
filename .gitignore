@@ -281,3 +281,13 @@ letsencrypt/
 Thumbs.db
 desktop.ini
 *:Zone.Identifier
+
+# Generated Valhalla graph data
+/valhalla/valhalla_data/
+
+# Generated isochrone analysis results
+/results/isochrones/
+
+# SGIS 자치구 경계 데이터는 팀원과 공유
+!data/raw/boundaries/
+!data/raw/boundaries/**
