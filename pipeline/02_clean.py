@@ -1,4 +1,4 @@
-
+import yaml
 import csv
 import json
 import math
@@ -8,12 +8,76 @@ from pathlib import Path
 from collections import Counter
 from datetime import datetime
 
+try:
+    from .hours import classify_hours_pair
+except ImportError:
+    from hours import classify_hours_pair
+
 
 # ==========================================
 # 1. 프로젝트 기본 경로
 # ==========================================
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+def load_config():
+    config_path = PROJECT_ROOT / "config.yaml"
+
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"설정 파일이 없습니다: {config_path}"
+        )
+
+    with config_path.open("r", encoding="utf-8") as file:
+        config = yaml.safe_load(file)
+
+    if not isinstance(config, dict):
+        raise ValueError("config.yaml 형식이 올바르지 않습니다.")
+
+    required_sections = {
+        "operating_hours",
+        "hours_missing_policy",
+        "hours_invalid_policy"
+    }
+
+    missing = required_sections - set(config)
+
+    if missing:
+        raise ValueError(
+            f"config.yaml 필수 항목 누락: {sorted(missing)}"
+        )
+
+    operating_hours = config["operating_hours"]
+
+    if not isinstance(operating_hours, dict):
+        raise ValueError(
+            "operating_hours는 딕셔너리 형식이어야 합니다."
+        )
+
+    allow_overnight = operating_hours.get("allow_overnight")
+    max_duration = operating_hours.get("max_duration_minutes")
+
+    if not isinstance(allow_overnight, bool):
+        raise ValueError(
+            "allow_overnight는 true 또는 false여야 합니다."
+        )
+
+    if (
+        isinstance(max_duration, bool)
+        or not isinstance(max_duration, int)
+        or not 1 <= max_duration <= 1440
+    ):
+        raise ValueError(
+            "max_duration_minutes는 1~1440 사이의 정수여야 합니다."
+        )
+
+    for key in ("hours_missing_policy", "hours_invalid_policy"):
+        if config[key] not in ("open", "closed"):
+            raise ValueError(
+                f"{key}는 'open' 또는 'closed'여야 합니다."
+            )
+
+    return config
 
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
 CLEAN_DIR = PROJECT_ROOT / "data" / "clean"
@@ -27,15 +91,22 @@ REPORT_FILE = RESULTS_DIR / "cleaning_report.csv"
 # 2. AED 운영시간 필드
 # ==========================================
 
+DAY_TIME_FIELDS = {
+    "mon": ("monSttTme", "monEndTme"),
+    "tue": ("tueSttTme", "tueEndTme"),
+    "wed": ("wedSttTme", "wedEndTme"),
+    "thu": ("thuSttTme", "thuEndTme"),
+    "fri": ("friSttTme", "friEndTme"),
+    "sat": ("satSttTme", "satEndTme"),
+    "sun": ("sunSttTme", "sunEndTme"),
+    "hol": ("holSttTme", "holEndTme"),
+}
+
+# 전체 운영시간 필드 목록
 TIME_FIELDS = [
-    "monSttTme", "monEndTme",
-    "tueSttTme", "tueEndTme",
-    "wedSttTme", "wedEndTme",
-    "thuSttTme", "thuEndTme",
-    "friSttTme", "friEndTme",
-    "satSttTme", "satEndTme",
-    "sunSttTme", "sunEndTme",
-    "holSttTme", "holEndTme"
+    field
+    for fields in DAY_TIME_FIELDS.values()
+    for field in fields
 ]
 
 
@@ -106,44 +177,72 @@ def check_coordinates(record):
 # 5. 운영시간 검사
 # ==========================================
 
-def check_operating_hours(record):
+def check_operating_hours(
+    record,
+    *,
+    allow_overnight,
+    max_duration_minutes
+):
     """
-    운영시간 원본을 변경하지 않고
-    특이한 시간 형식만 확인합니다.
+    요일별 운영시간을 시작·종료시간 쌍으로 검증합니다.
 
-    2400 초과 값은 임의로 변환하거나 삭제하지 않습니다.
+    valid   : 유효한 운영시간
+    missing : 시작 또는 종료시간 누락
+    invalid : 시간 형식 또는 운영시간 구간 오류
+
+    원본 시간값은 변경하지 않습니다.
     """
+
+    day_results = {}
 
     has_missing_time = False
+    missing_day_count = 0
+    invalid_day_count = 0
+
     over_2400_count = 0
     malformed_count = 0
 
+    # 기존 통계 항목은 유지
     for field in TIME_FIELDS:
-
         value = get_text(record, field)
 
         if not value:
             has_missing_time = True
             continue
 
-        # 4자리 숫자 형식인지 확인
         if not re.fullmatch(r"\d{4}", value):
             malformed_count += 1
             continue
 
-        # 24시 초과 값 확인
         if int(value) > 2400:
             over_2400_count += 1
 
-    review_required = (
-        over_2400_count > 0 or malformed_count > 0
-    )
+    # 요일별 시작·종료시간 쌍 검증
+    for day, (start_field, end_field) in DAY_TIME_FIELDS.items():
+
+        result = classify_hours_pair(
+            get_text(record, start_field),
+            get_text(record, end_field),
+            allow_overnight=allow_overnight,
+            max_duration_minutes=max_duration_minutes
+        )
+
+        day_results[day] = result
+
+        if result.status == "missing":
+            missing_day_count += 1
+
+        elif result.status == "invalid":
+            invalid_day_count += 1
 
     return {
+        "days": day_results,
         "has_missing_time": has_missing_time,
+        "missing_day_count": missing_day_count,
+        "invalid_day_count": invalid_day_count,
         "over_2400_count": over_2400_count,
         "malformed_count": malformed_count,
-        "review_required": review_required
+        "review_required": invalid_day_count > 0
     }
 
 
@@ -151,8 +250,12 @@ def check_operating_hours(record):
 # 6. AED 데이터 정제
 # ==========================================
 
-def clean_records(raw_records):
-
+def clean_records(
+    raw_records,
+    *,
+    allow_overnight=True,
+    max_duration_minutes=1440
+):
     cleaned_records = []
 
     seen_serials = set()
@@ -168,6 +271,14 @@ def clean_records(raw_records):
     review_record_count = 0
     over_2400_count = 0
     malformed_time_count = 0
+
+    # 요일별 운영시간 누락 및 오류 통계
+    missing_day_total = 0
+    invalid_day_total = 0
+
+    missing_day_counts = Counter()
+    invalid_day_counts = Counter()
+    invalid_reason_counts = Counter()
 
     for record in raw_records:
 
@@ -229,8 +340,11 @@ def clean_records(raw_records):
         # 6-5. 운영시간 검사
         # ------------------------------
 
-        time_result = check_operating_hours(record)
-
+        time_result = check_operating_hours(
+            record,
+            allow_overnight=allow_overnight,
+            max_duration_minutes=max_duration_minutes
+        )
         if time_result["has_missing_time"]:
             missing_time_count += 1
 
@@ -244,6 +358,18 @@ def clean_records(raw_records):
         over_2400_count += time_result["over_2400_count"]
         malformed_time_count += time_result["malformed_count"]
 
+        missing_day_total += time_result["missing_day_count"]
+        invalid_day_total += time_result["invalid_day_count"]
+
+        for day, result in time_result["days"].items():
+
+            if result.status == "missing":
+                missing_day_counts[day] += 1
+
+            elif result.status == "invalid":
+                invalid_day_counts[day] += 1
+                invalid_reason_counts[result.error] += 1
+
         # ------------------------------
         # 6-6. 기관명 검사
         # ------------------------------
@@ -254,11 +380,8 @@ def clean_records(raw_records):
             missing_org_count += 1
             quality_flags.append("missing_organization")
 
-        if time_result["over_2400_count"] > 0:
-            quality_flags.append("time_over_2400")
-
-        if time_result["malformed_count"] > 0:
-            quality_flags.append("unrecognized_time_format")
+        if time_result["invalid_day_count"] > 0:
+            quality_flags.append("invalid_operating_hours")
 
         if time_result["has_missing_time"]:
             quality_flags.append("some_operating_hours_missing")
@@ -288,12 +411,22 @@ def clean_records(raw_records):
         "cleaned_count": len(cleaned_records),
         "excluded_count": excluded_count,
         "exclusion_counts": exclusion_counts,
+
         "missing_org_count": missing_org_count,
         "missing_time_count": missing_time_count,
         "blank_time_values": blank_time_values,
+
         "review_record_count": review_record_count,
+
         "over_2400_count": over_2400_count,
-        "malformed_time_count": malformed_time_count
+        "malformed_time_count": malformed_time_count,
+
+        # 요일별 운영시간 통계
+        "missing_day_total": missing_day_total,
+        "invalid_day_total": invalid_day_total,
+        "missing_day_counts": missing_day_counts,
+        "invalid_day_counts": invalid_day_counts,
+        "invalid_reason_counts": invalid_reason_counts
     }
 
     return cleaned_records, statistics
@@ -412,11 +545,11 @@ def save_report(
 
         ("records_requiring_time_review",
          statistics["review_record_count"],
-         "특이한 운영시간 형식이 포함된 AED"),
+         "유효하지 않은 운영시간을 하나 이상 포함한 AED"),
 
         ("time_values_over_2400",
          statistics["over_2400_count"],
-         "2400을 초과하는 운영시간 값"),
+         "2400 초과 원본 시간값 개수 (참고용)"),
 
         ("unrecognized_time_formats",
          statistics["malformed_time_count"],
@@ -427,6 +560,43 @@ def save_report(
          "정제 보고서 생성 시각")
     ]
 
+    # 요일별 운영시간 누락 및 오류 통계
+    report_rows.append((
+        "invalid_operating_hour_days",
+        statistics["invalid_day_total"],
+        "운영시간 오류가 발생한 요일 전체 개수"
+    ))
+
+    report_rows.append((
+        "missing_operating_hour_days",
+        statistics["missing_day_total"],
+        "운영시간이 누락된 요일 전체 개수"
+    ))
+
+    # 요일별 상세 통계
+    for day in DAY_TIME_FIELDS:
+
+        report_rows.append((
+            f"invalid_{day}",
+            statistics["invalid_day_counts"][day],
+            f"{day}요일 운영시간 오류 AED 수"
+        ))
+
+        report_rows.append((
+            f"missing_{day}",
+            statistics["missing_day_counts"][day],
+            f"{day}요일 운영시간 누락 AED 수"
+        ))
+
+    # 오류 원인별 통계
+    for reason, count in statistics["invalid_reason_counts"].items():
+
+        report_rows.append((
+            f"invalid_reason_{reason}",
+            count,
+            "운영시간 오류 원인별 발생 건수"
+        ))
+
     with open(
         REPORT_FILE,
         "w",
@@ -434,7 +604,7 @@ def save_report(
         encoding="utf-8"
     ) as file:
 
-        writer = csv.writer(file)
+        writer = csv.writer(file, lineterminator="\n")
 
         writer.writerow([
             "항목",
@@ -452,6 +622,10 @@ def save_report(
 # ==========================================
 
 def main():
+
+    # 설정 파일 불러오기
+    config = load_config()
+    operating_hours_config = config["operating_hours"]
 
     print("=" * 50)
     print("AED 데이터 정제 시작")
@@ -485,8 +659,15 @@ def main():
     print("원본 AED 데이터:", f"{len(raw_records):,}건")
 
     # 정제 실행
-    cleaned_records, statistics = clean_records(raw_records)
-
+    cleaned_records, statistics = clean_records(
+        raw_records,
+        allow_overnight=operating_hours_config.get(
+            "allow_overnight", True
+        ),
+        max_duration_minutes=operating_hours_config.get(
+            "max_duration_minutes", 1440
+        )
+    )
     # 결과 저장
     save_clean_csv(cleaned_records)
 

@@ -16,6 +16,13 @@ valhalla:
   polygons: true
   timeout_seconds: 120
 
+hours_missing_policy: open
+hours_invalid_policy: closed
+
+operating_hours:
+  allow_overnight: true
+  max_duration_minutes: 1440
+
 analysis:
   contours_minutes:
     - 2
