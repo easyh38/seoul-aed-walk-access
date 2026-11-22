@@ -73,3 +73,46 @@ CREATE TABLE report ( -- 오류 제보 (개인정보 칼럼 없음)
     created_at TIMESTAMPTZ DEFAULT now(),
     status TEXT DEFAULT '접수'
 );
+
+-- 운영시간 반영 접근성 분석 통계
+CREATE TABLE availability_metrics (
+    run_id INTEGER NOT NULL
+        REFERENCES pipeline_run(id) ON DELETE CASCADE,
+    scope TEXT NOT NULL,
+    scenario TEXT NOT NULL
+        CHECK (
+            scenario IN ('available', 'available_or_unknown')
+        ),
+    analysis_datetime TIMESTAMPTZ NOT NULL,
+    walk_pct NUMERIC NOT NULL,
+    coverage_km2 NUMERIC NOT NULL,
+    deadzone_km2 NUMERIC NOT NULL,
+    aed_count INTEGER NOT NULL,
+    unknown_aed_count INTEGER NOT NULL,
+    total_grid_points INTEGER NOT NULL,
+    covered_grid_points INTEGER NOT NULL,
+    PRIMARY KEY (run_id, scope, scenario)
+);
+
+-- 운영시간 반영 지도 레이어
+CREATE TABLE availability_layer (
+    run_id INTEGER NOT NULL
+        REFERENCES pipeline_run(id) ON DELETE CASCADE,
+    scenario TEXT NOT NULL
+        CHECK (
+            scenario IN ('available', 'available_or_unknown')
+        ),
+    kind TEXT NOT NULL
+        CHECK (kind IN ('coverage', 'deadzone')),
+    analysis_datetime TIMESTAMPTZ NOT NULL,
+    geom geometry(MultiPolygon, 4326) NOT NULL,
+    PRIMARY KEY (run_id, scenario, kind)
+);
+
+-- 지도 레이어 공간 검색 인덱스
+CREATE INDEX availability_layer_geom_gix
+    ON availability_layer USING GIST (geom);
+
+-- EPSG:5179 직선거리 검색용 공간 인덱스
+CREATE INDEX aed_geom_5179_idx
+    ON aed USING GIST (ST_Transform(geom, 5179));
