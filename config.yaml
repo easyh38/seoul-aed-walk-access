@@ -14,6 +14,7 @@ valhalla:
   costing: pedestrian
   walking_speed_kmh: 5.1
   polygons: true
+  generalize: 0.0
   timeout_seconds: 120
 
 hours_missing_policy: open
