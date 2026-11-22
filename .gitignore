@@ -291,3 +291,5 @@ desktop.ini
 # SGIS 자치구 경계 데이터는 팀원과 공유
 !data/raw/boundaries/
 !data/raw/boundaries/**
+
+/results/availability/
