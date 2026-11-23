@@ -2,8 +2,9 @@
 
 from fastapi import FastAPI
 
-from api.routers import meta  # 다음: aeds, stats, layers, nearest, reports
+from api.routers import aeds, meta  # 다음: stats, layers, nearest, reports
 
 app = FastAPI(title="AED 접근성 분석 API")
 
 app.include_router(meta.router)
+app.include_router(aeds.router)
