@@ -73,3 +73,7 @@ CREATE TABLE report ( -- 오류 제보 (개인정보 칼럼 없음)
     created_at TIMESTAMPTZ DEFAULT now(),
     status TEXT DEFAULT '접수'
 );
+
+-- EPSG:5179 직선거리 검색용 공간 인덱스
+CREATE INDEX aed_geom_5179_idx
+    ON aed USING GIST (ST_Transform(geom, 5179));
