@@ -160,7 +160,8 @@ def request_isochrone(session, url, row, config):
             {"time": float(minutes)}
             for minutes in contours
         ],
-        "polygons": bool(valhalla.get("polygons", True))
+        "polygons": bool(valhalla.get("polygons", True)),
+        "generalize": float(valhalla.get("generalize", 0.0))
     }
 
     response = session.post(
