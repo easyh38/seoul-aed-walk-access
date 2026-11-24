@@ -1,4 +1,14 @@
-"""운영시간 상태를 반영한 AED 접근성 및 사각지대 분석."""
+"""운영시간 상태를 반영한 AED 접근성 및 사각지대 분석 (발표용 시각별 비교).
+
+analyze_availability.py가 만든 시각별 운영 여부 CSV와 DB의 4분 등시선·격자로
+"그 시각에 운영 중인 AED만 있을 때"의 접근률·사각지대를 계산한다.
+
+결과는 DB에 쓰지 않고 results/availability_metrics_<시각>.csv로만 저장한다.
+(실시간 반영은 API의 coverage_cache가 담당한다. DB와 pipeline_run은 건드리지 않는다.)
+
+    python -m pipeline.analyze_availability --datetime 2026-11-24T14:00
+    python pipeline/08_analyze_available_accessibility.py --at 2026-11-24T14:00 --apply
+"""
 
 from __future__ import annotations
 
@@ -6,7 +16,7 @@ import argparse
 import csv
 import json
 from collections import Counter
-from datetime import date, datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import text
@@ -15,19 +25,19 @@ from common import get_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
+AVAILABILITY_DIR = ROOT / "results" / "availability"   # 중간 결과 (git 제외)
+RESULTS_DIR = ROOT / "results"                          # 발표용 결과 (git 포함)
+SEOUL_TZ = timezone(timedelta(hours=9), name="Asia/Seoul")
 
-AVAILABILITY_CSV = (
-    ROOT / "results/availability/aed_availability_20261122_162400.csv"
-)
-AVAILABILITY_SUMMARY = (
-    ROOT / "results/availability/availability_summary_20261122_162400.json"
-)
-
-EXPECTED_AED = 11589
-EXPECTED_GRID = 60528
-EXPECTED_DISTRICTS = 25
+EXPECTED_DISTRICTS = 25  # 서울 자치구 수 (데이터가 바뀌어도 고정)
 
 SCENARIOS = ("available", "available_or_unknown")
+
+RESULT_COLUMNS = (
+    "analysis_datetime", "scenario", "scope",
+    "walk_pct", "coverage_km2", "deadzone_km2",
+    "aed_count", "unknown_aed_count", "covered_grid_points", "total_grid_points",
+)
 
 
 PRECHECK_SQL = text("""
@@ -64,45 +74,6 @@ INVALID_ISOCHRONE_SQL = text("""
             OR COUNT(i.minutes) FILTER (WHERE i.minutes = 4) <> 1
     ) AS invalid
 """)
-
-
-CREATE_TABLES = [
-    """
-    CREATE TABLE IF NOT EXISTS public.availability_metrics (
-        run_id INTEGER NOT NULL
-            REFERENCES public.pipeline_run(id) ON DELETE CASCADE,
-        scope TEXT NOT NULL,
-        scenario TEXT NOT NULL
-            CHECK (scenario IN ('available', 'available_or_unknown')),
-        analysis_datetime TIMESTAMPTZ NOT NULL,
-        walk_pct NUMERIC NOT NULL,
-        coverage_km2 NUMERIC NOT NULL,
-        deadzone_km2 NUMERIC NOT NULL,
-        aed_count INTEGER NOT NULL,
-        unknown_aed_count INTEGER NOT NULL,
-        total_grid_points INTEGER NOT NULL,
-        covered_grid_points INTEGER NOT NULL,
-        PRIMARY KEY (run_id, scope, scenario)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS public.availability_layer (
-        run_id INTEGER NOT NULL
-            REFERENCES public.pipeline_run(id) ON DELETE CASCADE,
-        scenario TEXT NOT NULL
-            CHECK (scenario IN ('available', 'available_or_unknown')),
-        kind TEXT NOT NULL
-            CHECK (kind IN ('coverage', 'deadzone')),
-        analysis_datetime TIMESTAMPTZ NOT NULL,
-        geom geometry(MultiPolygon, 4326) NOT NULL,
-        PRIMARY KEY (run_id, scenario, kind)
-    )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS availability_layer_geom_gix
-    ON public.availability_layer USING GIST (geom)
-    """,
-]
 
 
 CREATE_AVAILABILITY_TEMP_SQL = text("""
@@ -380,7 +351,7 @@ VERIFY_DISTRICT_OVERLAY_SQL = text("""
 """)
 
 
-INSERT_METRICS_SQL = text("""
+SELECT_METRICS_SQL = text("""
     WITH district_rows AS (
         SELECT
             g.scenario,
@@ -462,110 +433,78 @@ INSERT_METRICS_SQL = text("""
         ) a ON a.scenario = g.scenario
     )
 
-    INSERT INTO public.availability_metrics (
-        run_id,
-        scope,
-        scenario,
-        analysis_datetime,
-        walk_pct,
-        coverage_km2,
-        deadzone_km2,
-        aed_count,
-        unknown_aed_count,
-        total_grid_points,
-        covered_grid_points
-    )
-    SELECT
-        :run_id,
-        scope,
-        scenario,
-        :analysis_datetime,
-        walk_pct,
-        coverage_km2,
-        deadzone_km2,
-        aed_count,
-        unknown_aed_count,
-        total_grid_points,
-        covered_grid_points
+    SELECT *
     FROM (
         SELECT * FROM city_rows
         UNION ALL
         SELECT * FROM district_rows
     ) result
+    ORDER BY
+        CASE scenario WHEN 'available' THEN 1 ELSE 2 END,
+        CASE WHEN scope = '서울' THEN 0 ELSE 1 END,
+        scope
 """)
 
 
-INSERT_LAYERS_SQL = text("""
-    INSERT INTO public.availability_layer (
-        run_id,
-        scenario,
-        kind,
-        analysis_datetime,
-        geom
-    )
-    SELECT
-        :run_id,
-        scenario,
-        'coverage',
-        :analysis_datetime,
-        ST_Transform(coverage_geom, 4326)
-    FROM tmp_scenario_city_overlay
-
-    UNION ALL
-
-    SELECT
-        :run_id,
-        scenario,
-        'deadzone',
-        :analysis_datetime,
-        ST_Transform(deadzone_geom, 4326)
-    FROM tmp_scenario_city_overlay
-""")
+def parse_analysis_time(value: str) -> datetime:
+    """'2026-11-24T14:00' → 한국 시간. analyze_availability.py와 같은 규칙."""
+    try:
+        result = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(
+            "날짜 형식은 YYYY-MM-DDTHH:MM 또는 YYYY-MM-DDTHH:MM:SS 형식이어야 합니다."
+        ) from exc
+    if result.tzinfo is None:
+        return result.replace(tzinfo=SEOUL_TZ)
+    return result.astimezone(SEOUL_TZ)
 
 
-VERIFY_METRICS_SQL = text("""
-    SELECT
-        COUNT(*) AS total,
-        COUNT(*) FILTER (
-            WHERE walk_pct IS NULL
-               OR coverage_km2 IS NULL
-               OR deadzone_km2 IS NULL
-               OR aed_count IS NULL
-               OR unknown_aed_count IS NULL
-        ) AS null_rows
-    FROM public.availability_metrics
-    WHERE run_id = :run_id
-""")
+def resolve_availability_files(at: str | None, csv_path: str | None) -> tuple[Path, Path]:
+    """운영 여부 CSV와 요약 JSON 경로를 정한다.
+
+    --at이 있으면 그 시각의 파일, --availability-csv가 있으면 그 파일,
+    둘 다 없으면 results/availability/에서 가장 최근 파일을 쓴다.
+    """
+    if at is not None:
+        stamp = parse_analysis_time(at).strftime("%Y%m%d_%H%M%S")
+        availability_csv = AVAILABILITY_DIR / f"aed_availability_{stamp}.csv"
+    elif csv_path is not None:
+        availability_csv = Path(csv_path).resolve()
+    else:
+        candidates = sorted(AVAILABILITY_DIR.glob("aed_availability_*.csv"))
+        if not candidates:
+            raise FileNotFoundError(
+                f"{AVAILABILITY_DIR.relative_to(ROOT)}에 운영 여부 CSV가 없습니다. "
+                "먼저 실행: python -m pipeline.analyze_availability --datetime <시각>"
+            )
+        availability_csv = candidates[-1]
+
+    if not availability_csv.exists():
+        raise FileNotFoundError(
+            f"운영 여부 CSV가 없습니다: {availability_csv} "
+            "(python -m pipeline.analyze_availability --datetime <시각> 으로 먼저 만드세요)"
+        )
+
+    summary_name = availability_csv.name.replace(
+        "aed_availability_", "availability_summary_"
+    ).replace(".csv", ".json")
+    availability_summary = availability_csv.with_name(summary_name)
+    if not availability_summary.exists():
+        raise FileNotFoundError(f"운영 여부 요약 JSON이 없습니다: {availability_summary}")
+
+    return availability_csv, availability_summary
 
 
-VERIFY_LAYERS_SQL = text("""
-    SELECT
-        COUNT(*) AS total,
-        COUNT(*) FILTER (
-            WHERE geom IS NULL
-               OR ST_SRID(geom) <> 4326
-               OR GeometryType(geom) <> 'MULTIPOLYGON'
-               OR NOT ST_IsValid(geom)
-        ) AS invalid_rows
-    FROM public.availability_layer
-    WHERE run_id = :run_id
-""")
-
-
-def load_availability() -> tuple[list[dict], Counter, datetime, dict]:
+def load_availability(
+    availability_csv: Path, availability_summary: Path
+) -> tuple[list[dict], Counter, datetime, dict]:
     """운영시간 CSV와 요약 JSON을 검증한다."""
-
-    if not AVAILABILITY_CSV.exists():
-        raise FileNotFoundError(AVAILABILITY_CSV)
-
-    if not AVAILABILITY_SUMMARY.exists():
-        raise FileNotFoundError(AVAILABILITY_SUMMARY)
 
     rows = []
     source_ids = set()
     status_counts = Counter()
 
-    with AVAILABILITY_CSV.open(
+    with availability_csv.open(
         encoding="utf-8-sig",
         newline="",
     ) as f:
@@ -604,7 +543,7 @@ def load_availability() -> tuple[list[dict], Counter, datetime, dict]:
                 "availability_status": status,
             })
 
-    with AVAILABILITY_SUMMARY.open(encoding="utf-8") as f:
+    with availability_summary.open(encoding="utf-8") as f:
         summary = json.load(f)
 
     try:
@@ -617,8 +556,15 @@ def load_availability() -> tuple[list[dict], Counter, datetime, dict]:
     if analysis_datetime.tzinfo is None:
         raise ValueError("분석 기준 시각에 시간대 정보가 없습니다.")
 
-    if len(rows) != EXPECTED_AED:
-        raise ValueError(f"운영시간 AED 건수 오류: {len(rows)}")
+    if not rows:
+        raise ValueError("운영시간 CSV에 AED가 없습니다.")
+
+    # 고정 건수 대신 CSV와 요약 JSON이 서로 맞는지 검사한다
+    if summary.get("total_records") != len(rows):
+        raise ValueError(
+            f"운영시간 요약의 전체 건수({summary.get('total_records')})가 "
+            f"CSV({len(rows)})와 일치하지 않습니다."
+        )
 
     expected_counts = summary.get("status_counts", {})
 
@@ -628,39 +574,53 @@ def load_availability() -> tuple[list[dict], Counter, datetime, dict]:
                 f"{status} 건수가 CSV와 요약 JSON에서 일치하지 않습니다."
             )
 
-    if summary.get("total_records") != EXPECTED_AED:
-        raise ValueError("운영시간 분석 요약의 전체 건수가 일치하지 않습니다.")
-
     if summary.get("error_count") != 0:
         raise ValueError("운영시간 분석 예외가 0건이 아닙니다.")
 
     return rows, status_counts, analysis_datetime, summary
 
 
+def write_result_csv(path: Path, analysis_datetime: datetime, rows) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=RESULT_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({
+                "analysis_datetime": analysis_datetime.isoformat(),
+                **{k: row[k] for k in RESULT_COLUMNS if k != "analysis_datetime"},
+            })
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="운영시간을 반영한 AED 접근성 분석"
+        description="운영시간을 반영한 AED 접근성 분석 (결과는 CSV로만 저장)"
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="결과를 PostGIS에 저장합니다. 미입력 시 미리보기만 수행합니다.",
+        help="분석을 실행해 results/availability_metrics_<시각>.csv로 저장합니다. "
+             "미입력 시 사전 검사만 합니다. DB는 어느 경우에도 바꾸지 않습니다.",
     )
-    parser.add_argument(
-        "--osm-date",
-        default="2026-11-09",
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
+        "--at",
+        metavar="DATETIME",
+        help="분석 시각 (예: 2026-11-24T14:00). 같은 시각으로 만든 운영 여부 CSV를 사용합니다.",
     )
-    parser.add_argument(
-        "--aed-date",
-        default="2026-11-10",
+    source.add_argument(
+        "--availability-csv",
+        metavar="PATH",
+        help="운영 여부 CSV 경로를 직접 지정합니다.",
     )
     args = parser.parse_args()
 
-    osm_date = date.fromisoformat(args.osm_date)
-    aed_date = date.fromisoformat(args.aed_date)
+    availability_csv, availability_summary = resolve_availability_files(
+        args.at, args.availability_csv
+    )
 
     availability_rows, status_counts, analysis_datetime, summary = (
-        load_availability()
+        load_availability(availability_csv, availability_summary)
     )
 
     source_ids = sorted(
@@ -690,17 +650,23 @@ def main() -> None:
                 ).scalars().all()
             )
 
+        # 고정 건수 대신 DB 테이블과 운영 여부 CSV 사이의 관계로 검사한다
         if precheck["district_count"] != EXPECTED_DISTRICTS:
             raise RuntimeError("자치구 수가 25개가 아닙니다.")
 
-        if precheck["aed_count"] != EXPECTED_AED:
-            raise RuntimeError("DB AED 수가 예상과 다릅니다.")
+        if precheck["aed_count"] != len(availability_rows):
+            raise RuntimeError(
+                f"DB AED 수({precheck['aed_count']})와 운영 여부 CSV({len(availability_rows)})가 다릅니다."
+            )
 
-        if precheck["four_minute_isochrones"] != EXPECTED_AED:
-            raise RuntimeError("4분 Isochrone 수가 예상과 다릅니다.")
+        if precheck["four_minute_isochrones"] != precheck["aed_count"]:
+            raise RuntimeError(
+                f"4분 Isochrone 수({precheck['four_minute_isochrones']})가 "
+                f"AED 수({precheck['aed_count']})와 다릅니다."
+            )
 
-        if precheck["grid_count"] != EXPECTED_GRID:
-            raise RuntimeError("100m 격자 수가 예상과 다릅니다.")
+        if precheck["grid_count"] == 0:
+            raise RuntimeError("격자가 0건입니다. 05_generate_grid.py를 먼저 실행하세요.")
 
         if precheck["incomplete_grid"] != 0:
             raise RuntimeError("기존 전체 AED 접근성 분석이 완료되지 않았습니다.")
@@ -726,6 +692,7 @@ def main() -> None:
         print("=" * 55)
         print("운영시간 반영 접근성 분석 사전 검사")
         print("=" * 55)
+        print(f"운영 여부 CSV: {availability_csv.relative_to(ROOT)}")
         print(f"분석 기준 시각: {analysis_datetime.isoformat()}")
         print(f"DB AED: {precheck['aed_count']:,}개")
         print(f"운영시간 결과: {len(availability_rows):,}개")
@@ -746,53 +713,15 @@ def main() -> None:
         )
 
         if not args.apply:
-            print("\n미리보기 완료. DB는 변경하지 않았습니다.")
-            print("실제 저장하려면 --apply 옵션을 사용하세요.")
+            print("\n사전 검사 완료. 결과 파일은 만들지 않았습니다.")
+            print("분석을 실행하려면 --apply 옵션을 사용하세요.")
             return
 
-        run_config = {
-            "pipeline": "pipeline/08_analyze_available_accessibility.py",
-            "analysis_type": "operating_hours_snapshot",
-            "analysis_datetime": analysis_datetime.isoformat(),
-            "timezone": summary.get("timezone", "Asia/Seoul"),
-            "availability_csv": str(
-                AVAILABILITY_CSV.relative_to(ROOT)
-            ),
-            "availability_summary": str(
-                AVAILABILITY_SUMMARY.relative_to(ROOT)
-            ),
-            "status_counts": dict(status_counts),
-            "scenarios": {
-                "available": {
-                    "included_statuses": ["available"],
-                    "description": "운영 중으로 확인된 AED만 포함",
-                },
-                "available_or_unknown": {
-                    "included_statuses": ["available", "unknown"],
-                    "description": (
-                        "unknown을 잠재적 이용 가능으로 가정한 참고 시나리오"
-                    ),
-                },
-            },
-            "walking_minutes": 4,
-            "grid_spacing_m": 100,
-            "coverage_method": (
-                "Union of AED-origin 4-minute pedestrian isochrones"
-            ),
-            "area_srid": 5179,
-            "percentage_method": "100m grid-center point proportion",
-            "arrival_time_dynamic_check": False,
-            "osm_date": args.osm_date,
-            "aed_date": args.aed_date,
-            "warnings": [
-                "운영 상태는 지정된 분석 시점의 스냅샷입니다.",
-                "실제 도착 예상 시각별 운영 여부를 동적으로 판정하지 않습니다.",
-                "available_or_unknown은 unknown AED가 이용 가능하다고 보장하지 않습니다.",
-                "Isochrone은 AED를 출발점으로 계산한 4분 보행 도달 영역입니다.",
-            ],
-        }
+        stamp = analysis_datetime.astimezone(SEOUL_TZ).strftime("%Y%m%d_%H%M%S")
+        result_csv = RESULTS_DIR / f"availability_metrics_{stamp}.csv"
 
-        with engine.begin() as conn:
+        # 임시 테이블만 쓰고 끝나면 되돌린다 (DB의 실제 테이블은 바꾸지 않음)
+        with engine.connect() as conn:
             conn.execute(text("""
                 LOCK TABLE
                     public.district,
@@ -806,18 +735,13 @@ def main() -> None:
                 PRECHECK_SQL
             ).mappings().one()
 
-            if (
-                current["district_count"] != EXPECTED_DISTRICTS
-                or current["aed_count"] != EXPECTED_AED
-                or current["four_minute_isochrones"] != EXPECTED_AED
-                or current["grid_count"] != EXPECTED_GRID
-                or current["incomplete_grid"] != 0
-            ):
-                raise RuntimeError("실행 직전 DB 상태가 변경됐습니다.")
-
-            # 기존 metrics/layer와 분리된 운영시간 전용 테이블
-            for statement in CREATE_TABLES:
-                conn.execute(text(statement))
+            for key in ("district_count", "aed_count", "four_minute_isochrones", "grid_count"):
+                if current[key] != precheck[key]:
+                    raise RuntimeError(
+                        f"실행 직전 DB 상태가 변경됐습니다: {key} {precheck[key]} → {current[key]}"
+                    )
+            if current["incomplete_grid"] != 0:
+                raise RuntimeError("실행 직전 미계산 격자가 생겼습니다.")
 
             conn.execute(CREATE_AVAILABILITY_TEMP_SQL)
             conn.execute(
@@ -879,7 +803,8 @@ def main() -> None:
 
             if actual_scenarios != expected_scenarios:
                 raise RuntimeError(
-                    f"시나리오 AED 수 불일치: {actual_scenarios}"
+                    f"시나리오 AED 수 불일치: {actual_scenarios} "
+                    "(운영 중 AED가 0개인 시나리오가 있으면 계산할 수 없습니다)"
                 )
 
             city_checks = conn.execute(
@@ -918,101 +843,27 @@ def main() -> None:
                     f"자치구별 Geometry 검증 실패: {dict(district_check)}"
                 )
 
-            run_id = conn.execute(
-                text("""
-                    INSERT INTO public.pipeline_run (
-                        config,
-                        osm_date,
-                        aed_date
-                    )
-                    VALUES (
-                        CAST(:config AS jsonb),
-                        :osm_date,
-                        :aed_date
-                    )
-                    RETURNING id
-                """),
-                {
-                    "config": json.dumps(
-                        run_config,
-                        ensure_ascii=False,
-                    ),
-                    "osm_date": osm_date,
-                    "aed_date": aed_date,
-                },
-            ).scalar_one()
-
-            conn.execute(
-                INSERT_METRICS_SQL,
-                {
-                    "run_id": run_id,
-                    "analysis_datetime": analysis_datetime,
-                },
-            )
-
-            conn.execute(
-                INSERT_LAYERS_SQL,
-                {
-                    "run_id": run_id,
-                    "analysis_datetime": analysis_datetime,
-                },
-            )
-
-            metrics_check = conn.execute(
-                VERIFY_METRICS_SQL,
-                {"run_id": run_id},
-            ).mappings().one()
-
-            layer_check = conn.execute(
-                VERIFY_LAYERS_SQL,
-                {"run_id": run_id},
-            ).mappings().one()
-
-            if (
-                metrics_check["total"] != 52
-                or metrics_check["null_rows"] != 0
-            ):
-                raise RuntimeError(
-                    f"운영시간 통계 검증 실패: {dict(metrics_check)}"
-                )
-
-            if (
-                layer_check["total"] != 4
-                or layer_check["invalid_rows"] != 0
-            ):
-                raise RuntimeError(
-                    f"운영시간 지도 레이어 검증 실패: {dict(layer_check)}"
-                )
-
             saved_metrics = conn.execute(
-                text("""
-                    SELECT
-                        scenario,
-                        scope,
-                        walk_pct,
-                        coverage_km2,
-                        deadzone_km2,
-                        aed_count,
-                        unknown_aed_count,
-                        covered_grid_points,
-                        total_grid_points
-                    FROM public.availability_metrics
-                    WHERE run_id = :run_id
-                    ORDER BY
-                        CASE scenario
-                            WHEN 'available' THEN 1
-                            ELSE 2
-                        END,
-                        CASE WHEN scope = '서울' THEN 0 ELSE 1 END,
-                        scope
-                """),
-                {"run_id": run_id},
+                SELECT_METRICS_SQL
             ).mappings().all()
 
-        print("\n===== 운영시간 반영 분석 저장 완료 =====")
-        print(f"Pipeline run ID: {run_id}")
-        print(f"저장 통계: {metrics_check['total']}건")
-        print(f"저장 지도 레이어: {layer_check['total']}개")
+            conn.rollback()  # 임시 테이블 정리, 실제 테이블 변경 없음
+
+        expected_rows = len(SCENARIOS) * (EXPECTED_DISTRICTS + 1)
+        null_rows = sum(
+            1 for row in saved_metrics
+            if any(row[k] is None for k in RESULT_COLUMNS if k != "analysis_datetime")
+        )
+        if len(saved_metrics) != expected_rows or null_rows:
+            raise RuntimeError(
+                f"운영시간 통계 검증 실패: {len(saved_metrics)}행 / 예상 {expected_rows}, NULL {null_rows}행"
+            )
+
+        write_result_csv(result_csv, analysis_datetime, saved_metrics)
+
+        print("\n===== 운영시간 반영 분석 완료 =====")
+        print(f"결과 CSV: {result_csv.relative_to(ROOT)} ({len(saved_metrics)}행)")
+        print("DB 변경: 없음")
 
         print("\n===== 서울 전체 비교 =====")
         for row in saved_metrics:
