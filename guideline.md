@@ -409,18 +409,23 @@ grid_m: 100
 hours_missing_policy: open # 운영시간 없는 AED: open(운영 중으로 간주) / exclude
 ```
 
-### 3-3. 스크립트 6개 한눈에 보기
+### 3-3. 스크립트 한눈에 보기
+
+처음 계획한 6개(01~06)를 구현하면서 적재·판정·지표 단계를 나눠 아래 9개가 되었다 (#26).
 
 | 스크립트 | 입력 | 하는 일 | 출력 | 확인 방법 |
 | --- | --- | --- | --- | --- |
-| `01_collect.py` | API 키 | AED API 전체 페이지 호출 | `data/raw/aed_YYYYMMDD.json` | 파일 건수 = API가 알려주는 전체 건수 |
+| `01_collect.py` | API 키 | AED API 전체 페이지 호출 | `data/raw/aed_seoul_*.json` | 파일 건수 = API가 알려주는 전체 건수 |
 | `02_clean.py` | 원본 JSON | 좌표·중복·서울 밖 제거, 운영시간 해석 | `data/clean/aed.csv`, `results/cleaning_report.csv` | pytest 통과, 제거 건수 표 |
-| `03_load.py` | 정제 CSV, 구 경계 파일 | `district`, `aed` 테이블에 넣기, AED에 구 이름 지정 | DB | QGIS에서 점이 서울 안에 찍힘 |
-| `04_isochrone.py` | `aed` 테이블, Valhalla | AED마다 4분·2분 등시선 요청 | `isochrone` 테이블, 실패 목록 CSV | QGIS에서 다각형 확인, 실패율 |
-| `05_evaluate.py` | 구 경계, `aed`, `isochrone` | 100m 격자 생성, 직선/실보행 판정, 화면용 다각형 합치기 | `grid_point`, `layer` 테이블 | 무작위 20개 지점 수동 확인 |
-| `06_metrics.py` | `grid_point` | 서울·자치구별 지표 계산, 그래프 | `metrics` 테이블, `results/metrics.csv`, `results/*.png` | 두 번 돌려도 같은 숫자 |
+| `03_load_district.py` | 구 경계 SHP | `district` 테이블에 넣기 | DB | 25개 구, 유효한 도형 |
+| `03_load_aed.py` | 정제 CSV | `aed` 테이블에 넣기, AED에 구 이름 지정 | DB | QGIS에서 점이 서울 안에 찍힘 |
+| `04_isochrone.py` | 정제 CSV, Valhalla | AED마다 4분·2분 등시선 요청 | `results/isochrones/*.jsonl`, 실패 목록 CSV | 실패율 |
+| `04_load_isochrones.py` | 등시선 JSONL | `isochrone` 테이블에 넣기 | DB | QGIS에서 다각형 확인 |
+| `05_generate_grid.py` | `district` | 100m 격자 생성 | `grid_point` 테이블 | 격자 수, 구 경계 중복 0 |
+| `06_analyze_accessibility.py` | `grid_point`, `aed`, `isochrone` | 직선/실보행 판정 | `grid_point`의 판정 칼럼 | 무작위 20개 지점 수동 확인 |
+| `07_build_metrics.py` | `grid_point`, `isochrone` | 서울·자치구별 지표, 화면용 다각형 합치기 | `metrics`, `layer` 테이블 (`results/metrics.csv`, 그래프는 추가 예정) | 두 번 돌려도 같은 숫자 |
 
-`run_all.py`는 이 6개를 순서대로 실행하고, 시작할 때 `pipeline_run`에 설정값·OSM 날짜·AED 수집일을 기록한다. DB 연결·설정 읽기 같은 공통 코드는 `pipeline/common.py` 하나에 모아 둔다.
+`run_all.py`는 이 9개를 순서대로 실행하고 하나라도 실패하면 멈춘다 (`--list`로 단계 확인, `--from`/`--to`로 일부만 실행). DB 연결·설정 읽기 같은 공통 코드는 `pipeline/common.py`에 모아 둔다. 운영시간 반영 분석(`08_analyze_available_accessibility.py`)은 분석 시각을 인자로 받게 고친 뒤 `run_all.py`에 추가한다.
 
 ### 3-4. 단계별 구현 포인트
 

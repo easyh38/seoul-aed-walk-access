@@ -1,0 +1,10 @@
+# 3단계 분석 파이프라인 패키지
+# 설치: pip install -r pipeline/requirements.txt
+requests==2.34.2         # 01 AED API 수집, 04 Valhalla 호출
+PyYAML==6.0.4            # config.yaml 읽기
+python-dotenv==1.2.4     # .env 읽기 (common.py)
+SQLAlchemy==2.1.9        # DB 연결
+psycopg2-binary==2.9.13  # PostgreSQL 드라이버 (DATABASE_URL=postgresql+psycopg2://...)
+geopandas==1.2.0         # 03 자치구 경계 SHP 읽기
+pyogrio==0.13.0          # geopandas 파일 읽기 엔진
+shapely==2.2.0           # 03 도형 변환
