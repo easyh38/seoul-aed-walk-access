@@ -72,6 +72,27 @@ UPSERT_SQL = text("""
         geom = EXCLUDED.geom
 """)
 
+# 이번 CSV에 없는 AED (seed의 TEST*, 원본에서 사라진 AED 등)
+STALE_SQL = text("""
+    SELECT
+        COUNT(*) AS stale_count,
+        COUNT(*) FILTER (
+            WHERE EXISTS (SELECT 1 FROM public.report r WHERE r.aed_id = a.id)
+        ) AS stale_with_reports,
+        COALESCE(
+            (ARRAY_AGG(a.source_id ORDER BY a.source_id))[1:5],
+            ARRAY[]::text[]
+        ) AS examples
+    FROM public.aed a
+    WHERE NOT (a.source_id = ANY(CAST(:source_ids AS text[])))
+""")
+
+# isochrone은 ON DELETE CASCADE로 함께 지워진다
+DELETE_STALE_SQL = text("""
+    DELETE FROM public.aed
+    WHERE NOT (source_id = ANY(CAST(:source_ids AS text[])))
+""")
+
 VERIFY_SQL = text("""
     SELECT
         COUNT(*) AS total,
@@ -284,7 +305,17 @@ def main() -> None:
         help="실제 DB에 적재합니다. 미입력 시 미리보기만 수행합니다.",
     )
 
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="이번 CSV에 없는 AED를 삭제합니다 (--apply와 함께). "
+             "등시선도 함께 지워지고, 오류 제보가 연결된 AED가 있으면 멈춥니다.",
+    )
+
     args = parser.parse_args()
+
+    if args.prune and not args.apply:
+        parser.error("--prune은 --apply와 함께 사용합니다.")
 
     engine = get_engine()
 
@@ -298,6 +329,11 @@ def main() -> None:
                 text("SELECT COUNT(*) FROM public.aed")
             ).scalar_one()
 
+            stale = conn.execute(
+                STALE_SQL,
+                {"source_ids": sorted(source_ids)},
+            ).mappings().one()
+
             print("=" * 50)
             print("AED 데이터 적재 사전 검사")
             print("=" * 50)
@@ -306,14 +342,22 @@ def main() -> None:
             print(f"기존 DB AED 건수: {existing_count:,}")
             print(f"주소 기반 자치구 판정: {resolution_counts['address']:,}")
             print(f"좌표 기반 자치구 판정: {resolution_counts['spatial']:,}")
+            print(
+                f"CSV에 없는 기존 AED: {stale['stale_count']:,}"
+                + (f" (예: {', '.join(stale['examples'])})" if stale["stale_count"] else "")
+            )
 
             print("\n===== 자치구별 AED 건수 =====")
             for gu, count in sorted(gu_counts.items()):
                 print(f"{gu}: {count:,}건")
 
-            if len(records) != 11589:
-                raise RuntimeError(
-                    f"예상한 AED 11,589건과 다릅니다: {len(records)}"
+            if not records:
+                raise RuntimeError("CSV에 적재할 AED가 없습니다.")
+
+            if stale["stale_count"] and not args.prune:
+                print(
+                    "\n⚠ CSV에 없는 AED가 DB에 남습니다. "
+                    "이후 단계의 건수 검사에서 멈출 수 있으니 --prune으로 정리하세요."
                 )
 
             if not args.apply:
@@ -323,6 +367,25 @@ def main() -> None:
 
         # 모든 AED를 한 트랜잭션으로 적재한다.
         with engine.begin() as conn:
+            deleted = 0
+            if args.prune:
+                current_stale = conn.execute(
+                    STALE_SQL,
+                    {"source_ids": sorted(source_ids)},
+                ).mappings().one()
+
+                # 오류 제보(report)가 달린 AED를 지우면 제보 기록이 깨지므로 멈춘다
+                if current_stale["stale_with_reports"]:
+                    raise RuntimeError(
+                        f"삭제 대상 AED 중 {current_stale['stale_with_reports']}건에 "
+                        "오류 제보가 연결돼 있어 정리하지 않습니다. report를 먼저 확인하세요."
+                    )
+
+                deleted = conn.execute(
+                    DELETE_STALE_SQL,
+                    {"source_ids": sorted(source_ids)},
+                ).rowcount
+
             conn.execute(UPSERT_SQL, records)
 
             verification = conn.execute(
@@ -349,6 +412,15 @@ def main() -> None:
                     f"적재 건수 불일치: {dict(verification)}"
                 )
 
+            if args.prune:
+                total_aed = conn.execute(
+                    text("SELECT COUNT(*) FROM public.aed")
+                ).scalar_one()
+                if total_aed != len(records):
+                    raise RuntimeError(
+                        f"정리 후 AED 수({total_aed})가 CSV({len(records)})와 다릅니다."
+                    )
+
             invalid_counts = {
                 key: verification[key]
                 for key in (
@@ -367,6 +439,8 @@ def main() -> None:
 
         print("\n===== AED 적재 완료 =====")
         print(f"적재·갱신 AED: {len(records):,}건")
+        if args.prune:
+            print(f"CSV에 없어 삭제한 AED: {deleted:,}건 (등시선 함께 삭제)")
         print("source_id 중복: 0")
         print("좌표계 오류: 0")
         print("잘못된 Geometry: 0")
