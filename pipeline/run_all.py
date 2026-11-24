@@ -8,6 +8,7 @@
 
 각 단계는 별도 프로세스로 실행하고, 하나라도 실패하면 거기서 멈춘다.
 DB에 쓰는 단계는 --apply로 실행한다 (단계별 미리보기는 스크립트를 직접 실행).
+격자·판정은 --replace로 매번 다시 만들어, 같은 입력이면 몇 번을 돌려도 같은 결과가 나온다.
 
 아직 포함하지 않은 것 (이슈 #26 다음 작업):
 - 08_analyze_available_accessibility.py 와 운영시간 분석(analyze_availability, merge_availability)
@@ -33,8 +34,8 @@ STEPS = [
     ("aed", "03_load_aed.py", ["--apply"], "정제 AED → aed"),
     ("isochrone", "04_isochrone.py", ["--all"], "Valhalla 2·4분 등시선 → results/isochrones/"),
     ("load-isochrones", "04_load_isochrones.py", ["--apply"], "등시선 → isochrone"),
-    ("grid", "05_generate_grid.py", ["--apply"], "100m 격자 → grid_point"),
-    ("accessibility", "06_analyze_accessibility.py", ["--apply"], "직선/실보행 판정 → grid_point"),
+    ("grid", "05_generate_grid.py", ["--apply", "--replace"], "격자 다시 생성 → grid_point"),
+    ("accessibility", "06_analyze_accessibility.py", ["--apply", "--replace"], "직선/실보행 판정 → grid_point"),
     ("metrics", "07_build_metrics.py", ["--apply"], "지표·레이어 → metrics, layer"),
 ]
 STEP_NAMES = [s[0] for s in STEPS]
@@ -63,7 +64,7 @@ def parse_args() -> argparse.Namespace:
 
 def print_steps() -> None:
     for i, (name, script, extra, desc) in enumerate(STEPS, start=1):
-        print(f"{i:>2}. {name:<16} {script:<30} {' '.join(extra):<8} {desc}")
+        print(f"{i:>2}. {name:<16} {script:<30} {' '.join(extra):<18} {desc}")
 
 
 def main() -> int:

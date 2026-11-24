@@ -16,7 +16,6 @@ from common import get_engine
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INPUT_PATH = PROJECT_ROOT / "results/isochrones/aed_isochrones.jsonl"
 
-EXPECTED_AED_COUNT = 11589
 EXPECTED_CONTOURS = {2.0, 4.0}
 
 
@@ -221,13 +220,14 @@ def load_isochrones() -> tuple[list[dict], set[str]]:
             if contour_counts != Counter({2.0: 1, 4.0: 1}):
                 raise ValueError(f"{serial}: 2분·4분 영역 구성이 잘못되었습니다.")
 
-    if len(source_ids) != EXPECTED_AED_COUNT:
-        raise ValueError(
-            f"AED 개수 불일치: {len(source_ids)} / {EXPECTED_AED_COUNT}"
-        )
+    if not source_ids:
+        raise ValueError("JSONL에 AED 등시선이 없습니다.")
 
-    if len(rows) != EXPECTED_AED_COUNT * 2:
-        raise ValueError(f"Isochrone 개수 불일치: {len(rows)}")
+    # AED마다 2분·4분 두 개
+    if len(rows) != len(source_ids) * 2:
+        raise ValueError(
+            f"Isochrone 개수 불일치: {len(rows)} / 예상 {len(source_ids) * 2}"
+        )
 
     return rows, source_ids
 
@@ -270,9 +270,10 @@ def main() -> None:
 
             db_ids = set(id_map)
 
-            if db_aed_count != EXPECTED_AED_COUNT:
+            # 등시선 JSONL과 DB의 AED 수가 같아야 한다 (등시선 실패 AED가 있으면 여기서 멈춘다)
+            if db_aed_count != len(source_ids):
                 raise RuntimeError(
-                    f"DB AED 건수 불일치: {db_aed_count}"
+                    f"DB AED 건수 불일치: DB {db_aed_count} / JSONL {len(source_ids)}"
                 )
 
             if db_ids != source_ids:
@@ -329,17 +330,17 @@ def main() -> None:
                 {"source_ids": sorted_ids},
             ).scalar_one()
 
-            if verification["total"] != EXPECTED_AED_COUNT * 2:
+            if verification["total"] != len(source_ids) * 2:
                 raise RuntimeError(
                     f"Isochrone 전체 건수 오류: {dict(verification)}"
                 )
 
-            if verification["unique_aed"] != EXPECTED_AED_COUNT:
+            if verification["unique_aed"] != len(source_ids):
                 raise RuntimeError("Isochrone AED 식별자 개수가 일치하지 않습니다.")
 
             if (
-                verification["two_minutes"] != EXPECTED_AED_COUNT
-                or verification["four_minutes"] != EXPECTED_AED_COUNT
+                verification["two_minutes"] != len(source_ids)
+                or verification["four_minutes"] != len(source_ids)
             ):
                 raise RuntimeError("2분·4분 영역 개수가 일치하지 않습니다.")
 

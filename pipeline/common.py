@@ -44,3 +44,42 @@ def load_config() -> dict:
     if not isinstance(config, dict):
         raise ValueError("config.yaml 형식이 올바르지 않습니다.")
     return config
+
+
+# mode별 등시선 시간은 grid_point 칼럼(straight_2/4, walk_2/4)과 묶여 있어 고정이다
+MODE_MINUTES = {"oneway": 4, "roundtrip": 2}
+
+
+def load_analysis_config() -> dict:
+    """config.yaml의 접근성 분석 조건(grid_m, modes)을 읽고 검증한다.
+
+    반환: {"grid_m": 100, "modes": {"oneway": {"minutes": 4, "radius_m": 340.0}, ...}}
+    """
+    config = load_config()
+
+    grid_m = config.get("grid_m")
+    if not isinstance(grid_m, int) or grid_m <= 0:
+        raise ValueError(f"config.yaml grid_m은 양의 정수여야 합니다: {grid_m!r}")
+
+    modes = config.get("modes")
+    if not isinstance(modes, dict) or set(modes) != set(MODE_MINUTES):
+        raise ValueError(
+            f"config.yaml modes에는 {sorted(MODE_MINUTES)}가 있어야 합니다: {modes!r}"
+        )
+
+    checked = {}
+    for mode, minutes in MODE_MINUTES.items():
+        spec = modes[mode] or {}
+        if spec.get("minutes") != minutes:
+            raise ValueError(
+                f"config.yaml modes.{mode}.minutes는 {minutes}이어야 합니다 "
+                f"(grid_point 칼럼과 연결됨): {spec.get('minutes')!r}"
+            )
+        radius = spec.get("radius_m")
+        if not isinstance(radius, (int, float)) or radius <= 0:
+            raise ValueError(
+                f"config.yaml modes.{mode}.radius_m은 양수여야 합니다: {radius!r}"
+            )
+        checked[mode] = {"minutes": minutes, "radius_m": float(radius)}
+
+    return {"grid_m": grid_m, "modes": checked}
