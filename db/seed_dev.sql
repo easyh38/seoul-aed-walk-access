@@ -49,8 +49,58 @@ SELECT
   DATE '2026-11-10'
 WHERE NOT EXISTS (SELECT 1 FROM pipeline_run);
 
+-- 4. 가짜 지표 (/api/stats가 읽음) — 위 가짜 실행 기록에 연결
+--    25개 구 × 편도/왕복 + 서울 전체. 숫자는 구 번호로 만든 임의 값이고 실제 분석 결과가 아니다.
+--    서울 행은 구 값의 평균·합계로 만든다. 다시 실행하면 같은 값으로 덮어쓴다.
+WITH run AS (
+  SELECT id FROM pipeline_run
+  WHERE config->>'note' = '개발용 가짜 실행 기록'
+  ORDER BY id LIMIT 1
+),
+gu(name, n) AS (VALUES
+  ('종로구', 1), ('중구', 2), ('용산구', 3), ('성동구', 4), ('광진구', 5),
+  ('동대문구', 6), ('중랑구', 7), ('성북구', 8), ('강북구', 9), ('도봉구', 10),
+  ('노원구', 11), ('은평구', 12), ('서대문구', 13), ('마포구', 14), ('양천구', 15),
+  ('강서구', 16), ('구로구', 17), ('금천구', 18), ('영등포구', 19), ('동작구', 20),
+  ('관악구', 21), ('서초구', 22), ('강남구', 23), ('송파구', 24), ('강동구', 25)
+),
+fake AS (
+  -- 편도: 직선 60~89%, 실보행은 직선보다 8~14%p 낮게
+  SELECT name, 'oneway' AS mode,
+         60 + (n * 7) % 30 AS straight_pct,
+         60 + (n * 7) % 30 - (8 + n % 7) AS walk_pct,
+         2 + ((n * 13) % 20) * 0.5 AS deadzone_km2,
+         200 + (n * 37) % 400 AS aed_count
+  FROM gu
+  UNION ALL
+  -- 왕복(편도 2분): 직선 30~49%, 실보행은 직선보다 5~9%p 낮게
+  SELECT name, 'roundtrip',
+         30 + (n * 7) % 20,
+         30 + (n * 7) % 20 - (5 + n % 5),
+         8 + ((n * 13) % 20) * 0.6,
+         200 + (n * 37) % 400
+  FROM gu
+),
+rows AS (
+  SELECT name AS scope, mode, straight_pct, walk_pct, deadzone_km2, aed_count FROM fake
+  UNION ALL
+  SELECT '서울', mode, ROUND(AVG(straight_pct), 2), ROUND(AVG(walk_pct), 2),
+         SUM(deadzone_km2), SUM(aed_count)
+  FROM fake GROUP BY mode
+)
+INSERT INTO metrics (run_id, scope, mode, straight_pct, walk_pct, diff_pp, deadzone_km2, aed_count)
+SELECT run.id, scope, mode, straight_pct, walk_pct, straight_pct - walk_pct, deadzone_km2, aed_count
+FROM rows CROSS JOIN run
+ON CONFLICT (run_id, scope, mode) DO UPDATE SET
+  straight_pct = EXCLUDED.straight_pct,
+  walk_pct = EXCLUDED.walk_pct,
+  diff_pp = EXCLUDED.diff_pp,
+  deadzone_km2 = EXCLUDED.deadzone_km2,
+  aed_count = EXCLUDED.aed_count;
+
 COMMIT;
 
 -- 확인
 SELECT id, source_id, place, gu, hours IS NOT NULL AS has_hours FROM aed ORDER BY id;
 SELECT id, run_at, osm_date, aed_date FROM pipeline_run;
+SELECT run_id, mode, COUNT(*) AS metric_rows FROM metrics GROUP BY run_id, mode ORDER BY run_id, mode;
