@@ -9,8 +9,9 @@ import math
 from collections import Counter
 from pathlib import Path
 
-from dotenv import dotenv_values
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
+
+from common import get_engine
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -285,14 +286,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    database_url = dotenv_values(
-        PROJECT_ROOT / ".env"
-    ).get("DATABASE_URL")
-
-    if not database_url:
-        raise RuntimeError(".env에 DATABASE_URL이 없습니다.")
-
-    engine = create_engine(database_url, pool_pre_ping=True)
+    engine = get_engine()
 
     try:
         with engine.connect() as conn:
