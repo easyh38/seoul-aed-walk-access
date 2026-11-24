@@ -425,7 +425,13 @@ hours_missing_policy: open # 운영시간 없는 AED: open(운영 중으로 간�
 | `06_analyze_accessibility.py` | `grid_point`, `aed`, `isochrone` | 직선/실보행 판정 | `grid_point`의 판정 칼럼 | 무작위 20개 지점 수동 확인 |
 | `07_build_metrics.py` | `grid_point`, `isochrone` | 서울·자치구별 지표, 화면용 다각형 합치기 | `metrics`, `layer` 테이블 (`results/metrics.csv`, 그래프는 추가 예정) | 두 번 돌려도 같은 숫자 |
 
-`run_all.py`는 이 9개를 순서대로 실행하고 하나라도 실패하면 멈춘다 (`--list`로 단계 확인, `--from`/`--to`로 일부만 실행). DB 연결·설정 읽기 같은 공통 코드는 `pipeline/common.py`에 모아 둔다. 운영시간 반영 분석(`08_analyze_available_accessibility.py`)은 분석 시각을 인자로 받게 고친 뒤 `run_all.py`에 추가한다.
+`run_all.py`는 이 9개를 순서대로 실행하고 하나라도 실패하면 멈춘다 (`--list`로 단계 확인, `--from`/`--to`로 일부만 실행). DB 연결·설정 읽기 같은 공통 코드는 `pipeline/common.py`에 모아 둔다. 다시 실행해도 같은 결과가 나오도록 run_all은 AED를 `--prune`(CSV에 없는 AED 삭제), 격자·판정을 `--replace`(다시 계산)로 실행한다.
+
+발표용 시각별 비교(평일 낮 vs 밤)는 `--availability-at`으로 시각을 주면 기본 단계 뒤에 `analyze_availability`(시각별 AED 운영 여부) → `08_analyze_available_accessibility.py`(운영 중 AED 기준 접근률)를 실행한다. 08은 DB를 바꾸지 않고 `results/availability_metrics_<시각>.csv`만 남긴다. 실시간 반영은 API(`coverage_cache`)가 담당한다.
+
+```bash
+python pipeline/run_all.py --from metrics --availability-at 2026-11-24T14:00 --availability-at 2026-11-24T22:00
+```
 
 ### 3-4. 단계별 구현 포인트
 

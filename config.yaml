@@ -33,3 +33,11 @@ analysis:
   retry_delay_seconds: 2
   request_interval_seconds: 0.1
   resume: true
+
+# 접근성 분석 조건 (설계 3-2). 05 격자, 06 직선거리 판정, 07 지표가 읽는다.
+# minutes는 grid_point 칼럼(straight_2/4, walk_2/4)과 묶여 있어 바꾸지 않는다.
+# radius_m = 보행 속도 5.1km/h × 시간 (4분 ≈ 340m, 2분 ≈ 170m)
+grid_m: 100
+modes:
+  oneway:    { minutes: 4, radius_m: 340 }
+  roundtrip: { minutes: 2, radius_m: 170 }

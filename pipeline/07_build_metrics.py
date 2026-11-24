@@ -1,26 +1,37 @@
-"""서울 전체 및 자치구별 AED 접근성 통계와 사각지대 레이어를 생성한다."""
+"""서울 전체 및 자치구별 AED 접근성 통계와 사각지대 레이어를 생성한다.
+
+편도(oneway, 4분)와 왕복 기준(roundtrip, 편도 2분) 두 가지를 같은 방식으로 계산해
+metrics(26행 × 2), layer(2개 × 2)에 저장하고, 같은 지표를 results/metrics.csv로도 남긴다.
+"""
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from datetime import date
 from pathlib import Path
 
 from sqlalchemy import text
 
-from common import get_engine
+from common import get_engine, load_analysis_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
+METRICS_CSV = ROOT / "results" / "metrics.csv"
 
-EXPECTED_AED = 11589
-EXPECTED_ISOCHRONES = 23178
-EXPECTED_GRID = 60528
-EXPECTED_DISTRICTS = 25
+EXPECTED_DISTRICTS = 25  # 서울 자치구 수 (데이터가 바뀌어도 고정)
 
-MODE = "oneway"
-STRAIGHT_DISTANCE_4M = 340.0
+# mode별 등시선 시간과 06_analyze_accessibility.py가 채운 grid_point 판정 칼럼
+MODES = {
+    "oneway": {"minutes": 4, "straight": "straight_4", "walk": "walk_4"},
+    "roundtrip": {"minutes": 2, "straight": "straight_2", "walk": "walk_2"},
+}
+
+CSV_COLUMNS = (
+    "run_id", "scope", "mode",
+    "straight_pct", "walk_pct", "diff_pp", "deadzone_km2", "aed_count",
+)
 
 
 PRECHECK_SQL = text("""
@@ -71,7 +82,8 @@ INVALID_PAIR_SQL = text("""
 """)
 
 
-CREATE_TEMP_TABLES = [
+# mode와 무관한 임시 테이블 (한 번만 만든다)
+CREATE_BASE_TEMP_TABLES = [
     """
     CREATE TEMP TABLE tmp_district_5179 ON COMMIT DROP AS
     SELECT
@@ -80,18 +92,26 @@ CREATE_TEMP_TABLES = [
     FROM public.district
     """,
     """
+    CREATE TEMP TABLE tmp_seoul_geom ON COMMIT DROP AS
+    SELECT ST_UnaryUnion(ST_Collect(geom)) AS geom
+    FROM tmp_district_5179
+    """,
+]
+
+# mode별 임시 테이블. 이전 mode의 테이블을 지우고 같은 이름으로 다시 만든다.
+DROP_MODE_TEMP_TABLES = """
+    DROP TABLE IF EXISTS tmp_coverage_union, tmp_district_overlay, tmp_city_overlay
+"""
+
+CREATE_MODE_TEMP_TABLES = [
+    """
     CREATE TEMP TABLE tmp_coverage_union ON COMMIT DROP AS
     SELECT
         ST_UnaryUnion(
             ST_Collect(ST_Transform(geom, 5179))
         ) AS geom
     FROM public.isochrone
-    WHERE minutes = 4
-    """,
-    """
-    CREATE TEMP TABLE tmp_seoul_geom ON COMMIT DROP AS
-    SELECT ST_UnaryUnion(ST_Collect(geom)) AS geom
-    FROM tmp_district_5179
+    WHERE minutes = :minutes
     """,
     """
     CREATE TEMP TABLE tmp_district_overlay ON COMMIT DROP AS
@@ -173,16 +193,17 @@ DISTRICT_OVERLAY_VERIFY_SQL = text("""
 """)
 
 
-INSERT_METRICS_SQL = text("""
+# {straight}, {walk}에는 MODES의 칼럼 이름(코드에 정해 둔 상수)만 들어간다
+INSERT_METRICS_TEMPLATE = """
     WITH district_grid AS (
         SELECT
             gu,
             COUNT(*) AS total_points,
             COUNT(*) FILTER (
-                WHERE straight_4 IS TRUE
+                WHERE {straight} IS TRUE
             ) AS straight_points,
             COUNT(*) FILTER (
-                WHERE walk_4 IS TRUE
+                WHERE {walk} IS TRUE
             ) AS walk_points
         FROM public.grid_point
         GROUP BY gu
@@ -234,7 +255,7 @@ INSERT_METRICS_SQL = text("""
             ROUND(
                 (
                     100.0 * COUNT(*) FILTER (
-                        WHERE straight_4 IS TRUE
+                        WHERE {straight} IS TRUE
                     ) / NULLIF(COUNT(*), 0)
                 )::numeric,
                 2
@@ -243,7 +264,7 @@ INSERT_METRICS_SQL = text("""
             ROUND(
                 (
                     100.0 * COUNT(*) FILTER (
-                        WHERE walk_4 IS TRUE
+                        WHERE {walk} IS TRUE
                     ) / NULLIF(COUNT(*), 0)
                 )::numeric,
                 2
@@ -252,9 +273,9 @@ INSERT_METRICS_SQL = text("""
             ROUND(
                 (
                     100.0 * (
-                        COUNT(*) FILTER (WHERE straight_4 IS TRUE)
+                        COUNT(*) FILTER (WHERE {straight} IS TRUE)
                         -
-                        COUNT(*) FILTER (WHERE walk_4 IS TRUE)
+                        COUNT(*) FILTER (WHERE {walk} IS TRUE)
                     ) / NULLIF(COUNT(*), 0)
                 )::numeric,
                 2
@@ -285,7 +306,7 @@ INSERT_METRICS_SQL = text("""
     SELECT
         :run_id,
         scope,
-        'oneway',
+        :mode,
         straight_pct,
         walk_pct,
         diff_pp,
@@ -296,7 +317,7 @@ INSERT_METRICS_SQL = text("""
         UNION ALL
         SELECT * FROM district_metrics
     ) result
-""")
+"""
 
 
 UPSERT_LAYER_SQL = text("""
@@ -306,7 +327,7 @@ UPSERT_LAYER_SQL = text("""
         geom
     )
     SELECT
-        'oneway',
+        :mode,
         'coverage',
         ST_Transform(coverage_geom, 4326)
     FROM tmp_city_overlay
@@ -314,7 +335,7 @@ UPSERT_LAYER_SQL = text("""
     UNION ALL
 
     SELECT
-        'oneway',
+        :mode,
         'deadzone',
         ST_Transform(deadzone_geom, 4326)
     FROM tmp_city_overlay
@@ -337,7 +358,7 @@ VERIFY_METRICS_SQL = text("""
         ) AS null_metrics
     FROM public.metrics
     WHERE run_id = :run_id
-      AND mode = 'oneway'
+      AND mode = :mode
 """)
 
 
@@ -352,14 +373,150 @@ VERIFY_LAYER_SQL = text("""
                OR ST_IsEmpty(geom)
         ) AS invalid_layers
     FROM public.layer
-    WHERE mode = 'oneway'
+    WHERE mode = :mode
       AND kind IN ('coverage', 'deadzone')
 """)
 
 
+SAVED_METRICS_SQL = text("""
+    SELECT
+        run_id,
+        scope,
+        mode,
+        straight_pct,
+        walk_pct,
+        diff_pp,
+        deadzone_km2,
+        aed_count
+    FROM public.metrics
+    WHERE run_id = :run_id
+    ORDER BY
+        CASE mode WHEN 'oneway' THEN 0 ELSE 1 END,
+        CASE WHEN scope = '서울' THEN 0 ELSE 1 END,
+        scope
+""")
+
+
+def check_source_data(precheck, invalid_pairs) -> None:
+    """원본 테이블끼리 맞는지 검사한다 (고정 건수 대신 데이터 사이의 관계로 확인)."""
+
+    if precheck["district_count"] != EXPECTED_DISTRICTS:
+        raise RuntimeError(
+            f"자치구 수 불일치: {precheck['district_count']} / 예상 {EXPECTED_DISTRICTS}"
+        )
+
+    for key in ("aed_count", "grid_count"):
+        if precheck[key] == 0:
+            raise RuntimeError(f"{key}가 0건입니다. 이전 단계를 먼저 실행하세요.")
+
+    # AED마다 2분·4분 등시선이 하나씩 있어야 한다
+    if precheck["isochrone_count"] != precheck["aed_count"] * len(MODES):
+        raise RuntimeError(
+            f"등시선 수 불일치: {precheck['isochrone_count']} / "
+            f"예상 {precheck['aed_count'] * len(MODES)} (AED {precheck['aed_count']} × {len(MODES)})"
+        )
+
+    for key in ("invalid_aed", "invalid_grid", "invalid_districts", "invalid_isochrones"):
+        if precheck[key] != 0:
+            raise RuntimeError(
+                f"공간 데이터 사전 검사 실패: {key}={precheck[key]}"
+            )
+
+    if precheck["incomplete_grid"] != 0:
+        raise RuntimeError("아직 접근성 계산이 완료되지 않은 격자가 있습니다.")
+
+    if invalid_pairs != 0:
+        raise RuntimeError(
+            f"AED별 2분·4분 Isochrone 구성 오류: {invalid_pairs}"
+        )
+
+
+def build_mode(conn, run_id: int, mode: str) -> dict:
+    """한 mode의 도달 구역·사각지대를 계산해 metrics, layer에 저장한다."""
+
+    spec = MODES[mode]
+
+    conn.execute(text(DROP_MODE_TEMP_TABLES))
+    for statement in CREATE_MODE_TEMP_TABLES:
+        conn.execute(text(statement), {"minutes": spec["minutes"]})
+
+    city_check = conn.execute(OVERLAY_VERIFY_SQL).mappings().one()
+    district_check = conn.execute(DISTRICT_OVERLAY_VERIFY_SQL).mappings().one()
+
+    if (
+        not city_check["seoul_valid"]
+        or not city_check["coverage_valid"]
+        or not city_check["deadzone_valid"]
+        or city_check["coverage_empty"]
+        or city_check["deadzone_empty"]
+    ):
+        raise RuntimeError(
+            f"[{mode}] 서울 Geometry 검증 실패: {dict(city_check)}"
+        )
+
+    if (
+        city_check["overlap_area_m2"] > 1.0
+        or city_check["partition_difference_m2"] > 1.0
+    ):
+        raise RuntimeError(
+            f"[{mode}] 접근 영역과 사각지대의 공간 분할 오류: {dict(city_check)}"
+        )
+
+    if (
+        district_check["district_count"] != EXPECTED_DISTRICTS
+        or district_check["invalid_coverage"] != 0
+        or district_check["invalid_deadzone"] != 0
+    ):
+        raise RuntimeError(
+            f"[{mode}] 자치구별 공간 연산 검증 실패: {dict(district_check)}"
+        )
+
+    insert_metrics = text(INSERT_METRICS_TEMPLATE.format(
+        straight=spec["straight"], walk=spec["walk"],
+    ))
+    conn.execute(insert_metrics, {"run_id": run_id, "mode": mode})
+    conn.execute(UPSERT_LAYER_SQL, {"mode": mode})
+
+    metrics_check = conn.execute(
+        VERIFY_METRICS_SQL, {"run_id": run_id, "mode": mode}
+    ).mappings().one()
+    layer_check = conn.execute(
+        VERIFY_LAYER_SQL, {"mode": mode}
+    ).mappings().one()
+
+    if (
+        metrics_check["metric_count"] != EXPECTED_DISTRICTS + 1
+        or metrics_check["null_metrics"] != 0
+    ):
+        raise RuntimeError(
+            f"[{mode}] 통계 저장 검증 실패: {dict(metrics_check)}"
+        )
+
+    if (
+        layer_check["layer_count"] != 2
+        or layer_check["invalid_layers"] != 0
+    ):
+        raise RuntimeError(
+            f"[{mode}] 지도 레이어 저장 검증 실패: {dict(layer_check)}"
+        )
+
+    return dict(city_check)
+
+
+def write_metrics_csv(rows) -> None:
+    """metrics 테이블에 저장한 이번 실행의 지표를 results/metrics.csv로 저장한다."""
+
+    METRICS_CSV.parent.mkdir(parents=True, exist_ok=True)
+    with METRICS_CSV.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row[k] for k in CSV_COLUMNS})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="서울 AED 접근성 통계 및 사각지대 레이어 생성"
+        description="서울 AED 접근성 통계 및 사각지대 레이어 생성 (편도·왕복)"
     )
     parser.add_argument(
         "--apply",
@@ -405,62 +562,41 @@ def main() -> None:
         print(f"이전 실행 이력: {precheck['previous_runs']:,}건")
         print(f"이전 통계: {precheck['previous_metrics']:,}건")
         print(f"기존 레이어: {precheck['previous_layers']:,}개")
-        print(f"분석 모드: {MODE}")
+        mode_labels = ", ".join(
+            f"{mode}({spec['minutes']}분)" for mode, spec in MODES.items()
+        )
+        print(f"분석 모드: {mode_labels}")
         print("운영시간 반영: 아니요 (전체 등록 AED 기준)")
         print("면적 계산: EPSG:5179 실제 Geometry 면적")
 
-        expected = {
-            "district_count": EXPECTED_DISTRICTS,
-            "aed_count": EXPECTED_AED,
-            "isochrone_count": EXPECTED_ISOCHRONES,
-            "grid_count": EXPECTED_GRID,
-        }
-
-        for key, value in expected.items():
-            if precheck[key] != value:
-                raise RuntimeError(
-                    f"{key} 불일치: {precheck[key]} / 예상 {value}"
-                )
-
-        invalid_keys = (
-            "invalid_aed",
-            "invalid_grid",
-            "invalid_districts",
-            "invalid_isochrones",
-        )
-
-        for key in invalid_keys:
-            if precheck[key] != 0:
-                raise RuntimeError(
-                    f"공간 데이터 사전 검사 실패: {key}={precheck[key]}"
-                )
-
-        if precheck["incomplete_grid"] != 0:
-            raise RuntimeError("아직 접근성 계산이 완료되지 않은 격자가 있습니다.")
-
-        if invalid_pairs != 0:
-            raise RuntimeError(
-                f"AED별 2분·4분 Isochrone 구성 오류: {invalid_pairs}"
-            )
+        check_source_data(precheck, invalid_pairs)
 
         if not args.apply:
             print("\n미리보기 완료. DB는 변경하지 않았습니다.")
             print("실제 저장하려면 --apply 옵션을 사용하세요.")
             return
 
+        # 05·06이 사용한 분석 조건(config.yaml)을 실행 기록에 남긴다
+        settings = load_analysis_config()
         analysis_config = {
             "pipeline": "pipeline/07_build_metrics.py",
-            "mode": MODE,
-            "grid_spacing_m": 100,
-            "straight_distance_4min_m": STRAIGHT_DISTANCE_4M,
+            "modes": {
+                mode: {
+                    "isochrone_minutes": spec["minutes"],
+                    "straight_radius_m": settings["modes"][mode]["radius_m"],
+                }
+                for mode, spec in MODES.items()
+            },
+            "grid_spacing_m": settings["grid_m"],
             "walking_coverage": (
-                "Union of all AED-origin 4-minute pedestrian isochrones"
+                "Union of all AED-origin pedestrian isochrones per mode "
+                "(oneway: 4 min, roundtrip: 2 min)"
             ),
             "coverage_area_method": (
-                "District intersection with the 4-minute isochrone union"
+                "District intersection with the isochrone union"
             ),
             "deadzone_area_method": (
-                "District geometry minus the 4-minute isochrone union"
+                "District geometry minus the isochrone union"
             ),
             "area_srid": 5179,
             "accessibility_percentage_method": (
@@ -469,11 +605,9 @@ def main() -> None:
             "operating_hours_applied": False,
             "osm_date": args.osm_date,
             "aed_date": args.aed_date,
-            "direction_note": (
-                "One-way AED-origin isochrone coverage; "
-                "roundtrip analysis is not included"
-            ),
         }
+
+        city_results = {}
 
         with engine.begin() as conn:
             # 원본 공간 테이블을 잠가 분석 도중 데이터가 바뀌지 않게 한다.
@@ -490,57 +624,20 @@ def main() -> None:
                 PRECHECK_SQL
             ).mappings().one()
 
-            if (
-                current["district_count"] != EXPECTED_DISTRICTS
-                or current["aed_count"] != EXPECTED_AED
-                or current["isochrone_count"] != EXPECTED_ISOCHRONES
-                or current["grid_count"] != EXPECTED_GRID
-                or current["incomplete_grid"] != 0
-            ):
-                raise RuntimeError("실행 직전 원본 데이터 상태가 변경됐습니다.")
+            # 사전 검사 이후 원본 데이터가 바뀌었는지 확인
+            for key in ("district_count", "aed_count", "isochrone_count", "grid_count"):
+                if current[key] != precheck[key]:
+                    raise RuntimeError(
+                        f"실행 직전 원본 데이터 상태가 변경됐습니다: "
+                        f"{key} {precheck[key]} → {current[key]}"
+                    )
+            if current["incomplete_grid"] != 0:
+                raise RuntimeError("실행 직전 미계산 격자가 생겼습니다.")
 
-            # 1. 모든 4분 Isochrone을 EPSG:5179에서 합집합 처리
-            for statement in CREATE_TEMP_TABLES:
+            for statement in CREATE_BASE_TEMP_TABLES:
                 conn.execute(text(statement))
 
-            # 2. 공간 연산 결과 검증
-            city_check = conn.execute(
-                OVERLAY_VERIFY_SQL
-            ).mappings().one()
-
-            district_check = conn.execute(
-                DISTRICT_OVERLAY_VERIFY_SQL
-            ).mappings().one()
-
-            if (
-                not city_check["seoul_valid"]
-                or not city_check["coverage_valid"]
-                or not city_check["deadzone_valid"]
-                or city_check["coverage_empty"]
-                or city_check["deadzone_empty"]
-            ):
-                raise RuntimeError(
-                    f"서울 Geometry 검증 실패: {dict(city_check)}"
-                )
-
-            if (
-                city_check["overlap_area_m2"] > 1.0
-                or city_check["partition_difference_m2"] > 1.0
-            ):
-                raise RuntimeError(
-                    f"접근 영역과 사각지대의 공간 분할 오류: {dict(city_check)}"
-                )
-
-            if (
-                district_check["district_count"] != EXPECTED_DISTRICTS
-                or district_check["invalid_coverage"] != 0
-                or district_check["invalid_deadzone"] != 0
-            ):
-                raise RuntimeError(
-                    f"자치구별 공간 연산 검증 실패: {dict(district_check)}"
-                )
-
-            # 3. 분석 실행 이력 생성
+            # 분석 실행 이력 생성
             run_id = conn.execute(
                 text("""
                     INSERT INTO public.pipeline_run (
@@ -565,87 +662,47 @@ def main() -> None:
                 },
             ).scalar_one()
 
-            # 4. 서울 전체 및 25개 자치구 통계 저장
-            conn.execute(
-                INSERT_METRICS_SQL,
-                {"run_id": run_id},
-            )
-
-            # 5. 지도용 coverage/deadzone 레이어 저장
-            conn.execute(UPSERT_LAYER_SQL)
-
-            metrics_check = conn.execute(
-                VERIFY_METRICS_SQL,
-                {"run_id": run_id},
-            ).mappings().one()
-
-            layer_check = conn.execute(
-                VERIFY_LAYER_SQL
-            ).mappings().one()
-
-            if (
-                metrics_check["metric_count"] != 26
-                or metrics_check["null_metrics"] != 0
-            ):
-                raise RuntimeError(
-                    f"통계 저장 검증 실패: {dict(metrics_check)}"
-                )
-
-            if (
-                layer_check["layer_count"] != 2
-                or layer_check["invalid_layers"] != 0
-            ):
-                raise RuntimeError(
-                    f"지도 레이어 저장 검증 실패: {dict(layer_check)}"
-                )
+            # mode별 통계·레이어 저장 (하나라도 실패하면 전체 취소)
+            for mode in MODES:
+                city_results[mode] = build_mode(conn, run_id, mode)
 
             saved_metrics = conn.execute(
-                text("""
-                    SELECT
-                        scope,
-                        straight_pct,
-                        walk_pct,
-                        diff_pp,
-                        deadzone_km2,
-                        aed_count
-                    FROM public.metrics
-                    WHERE run_id = :run_id
-                      AND mode = 'oneway'
-                    ORDER BY
-                        CASE WHEN scope = '서울' THEN 0 ELSE 1 END,
-                        scope
-                """),
+                SAVED_METRICS_SQL,
                 {"run_id": run_id},
             ).mappings().all()
 
+        # DB 저장이 확정된 뒤 같은 값을 CSV로 남긴다
+        write_metrics_csv(saved_metrics)
+
         print("\n===== 분석 결과 저장 완료 =====")
         print(f"Pipeline run ID: {run_id}")
-        print(f"저장 통계: {metrics_check['metric_count']}건")
-        print(f"지도 레이어: {layer_check['layer_count']}개")
-        print(
-            f"서울 전체 4분 사각지대: "
-            f"{city_check['deadzone_area_m2'] / 1_000_000:.4f} km²"
-        )
-        print(
-            f"서울 전체 4분 접근 가능 영역: "
-            f"{city_check['coverage_area_m2'] / 1_000_000:.4f} km²"
-        )
+        print(f"저장 통계: {len(saved_metrics)}건 ({len(MODES)}개 mode × {EXPECTED_DISTRICTS + 1})")
+        print(f"지도 레이어: {len(MODES) * 2}개")
+        print(f"CSV: {METRICS_CSV.relative_to(ROOT)}")
 
-        print("\n===== 서울·자치구별 접근성 =====")
-        print(
-            f"{'구분':<9} {'직선거리':>10} {'실제 보행':>10} "
-            f"{'차이(pp)':>10} {'사각지대(km²)':>14} {'AED':>7}"
-        )
-
-        for row in saved_metrics:
+        for mode, city in city_results.items():
             print(
-                f"{row['scope']:<9} "
-                f"{row['straight_pct']:>9.2f}% "
-                f"{row['walk_pct']:>9.2f}% "
-                f"{row['diff_pp']:>9.2f} "
-                f"{row['deadzone_km2']:>14.4f} "
-                f"{row['aed_count']:>7,}"
+                f"[{mode}] 서울 사각지대 {city['deadzone_area_m2'] / 1_000_000:.4f} km², "
+                f"접근 가능 영역 {city['coverage_area_m2'] / 1_000_000:.4f} km²"
             )
+
+        for mode in MODES:
+            print(f"\n===== 서울·자치구별 접근성 ({mode}) =====")
+            print(
+                f"{'구분':<9} {'직선거리':>10} {'실제 보행':>10} "
+                f"{'차이(pp)':>10} {'사각지대(km²)':>14} {'AED':>7}"
+            )
+            for row in saved_metrics:
+                if row["mode"] != mode:
+                    continue
+                print(
+                    f"{row['scope']:<9} "
+                    f"{row['straight_pct']:>9.2f}% "
+                    f"{row['walk_pct']:>9.2f}% "
+                    f"{row['diff_pp']:>9.2f} "
+                    f"{row['deadzone_km2']:>14.4f} "
+                    f"{row['aed_count']:>7,}"
+                )
 
         print("\nNULL 통계: 0")
         print("Geometry 오류: 0")

@@ -1,4 +1,4 @@
-"""서울시 100m 격자 평가 지점을 생성해 PostGIS에 적재한다."""
+"""서울시 격자 평가 지점(기본 100m, config.yaml grid_m)을 생성해 PostGIS에 적재한다."""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-from common import get_engine
+from common import get_engine, load_analysis_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
-GRID_SIZE_M = 100
+# 격자 간격은 config.yaml의 grid_m (설계 3-2)
+GRID_SIZE_M = load_analysis_config()["grid_m"]
 GRID_HALF_M = GRID_SIZE_M // 2
 EXPECTED_DISTRICT_COUNT = 25
 
@@ -167,14 +168,22 @@ def get_grid_parameters() -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="서울시 100m 격자 평가 지점 생성"
+        description=f"서울시 {GRID_SIZE_M}m 격자 평가 지점 생성"
     )
     parser.add_argument(
         "--apply",
         action="store_true",
         help="실제로 DB에 격자 지점을 저장합니다.",
     )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="기존 grid_point를 지우고 다시 만듭니다 (--apply와 함께, 재실행용).",
+    )
     args = parser.parse_args()
+
+    if args.replace and not args.apply:
+        parser.error("--replace는 --apply와 함께 사용합니다.")
 
     engine = get_engine()
     parameters = get_grid_parameters()
@@ -213,7 +222,7 @@ def main() -> None:
         outside_count = preview["outside_points"]
 
         print("=" * 50)
-        print("100m 격자 생성 사전 검사")
+        print(f"{GRID_SIZE_M}m 격자 생성 사전 검사")
         print("=" * 50)
         print(f"자치구 개수: {district_check['total']:,}개")
         print(f"격자 간격: {GRID_SIZE_M}m")
@@ -235,10 +244,10 @@ def main() -> None:
             print("실제 적재하려면 --apply 옵션을 사용하세요.")
             return
 
-        if existing_count != 0:
+        if existing_count != 0 and not args.replace:
             raise RuntimeError(
                 "grid_point 테이블이 비어 있지 않습니다. "
-                "기존 데이터를 확인한 후 진행하세요."
+                "기존 데이터를 지우고 다시 만들려면 --replace를 함께 사용하세요."
             )
 
         # 하나의 트랜잭션으로 격자 생성 및 검증
@@ -246,6 +255,11 @@ def main() -> None:
             conn.execute(text(
                 "LOCK TABLE public.grid_point IN SHARE ROW EXCLUSIVE MODE"
             ))
+
+            if args.replace:
+                # 기존 격자와 판정 결과를 지우고 처음부터 만든다 (id도 1부터 다시)
+                conn.execute(text("TRUNCATE public.grid_point RESTART IDENTITY"))
+                print(f"기존 grid_point {existing_count:,}개 삭제")
 
             current_count = conn.execute(
                 GRID_COUNT_SQL
@@ -302,7 +316,7 @@ def main() -> None:
                     "25개 자치구에 격자가 모두 생성되지 않았습니다."
                 )
 
-        print("\n===== 100m 격자 생성 완료 =====")
+        print(f"\n===== {GRID_SIZE_M}m 격자 생성 완료 =====")
         print(f"평가 지점: {verification['total']:,}개")
         print(f"고유 지점: {verification['unique_points']:,}개")
         print("NULL 자치구: 0")

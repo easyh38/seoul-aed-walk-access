@@ -7,18 +7,17 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-from common import get_engine
+from common import get_engine, load_analysis_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
-EXPECTED_AED_COUNT = 11589
-EXPECTED_ISOCHRONE_COUNT = 23178
-EXPECTED_GRID_COUNT = 60528
-EXPECTED_DISTRICTS = 25
+EXPECTED_DISTRICTS = 25  # 서울 자치구 수 (데이터가 바뀌어도 고정)
 
-STRAIGHT_2_M = 170.0
-STRAIGHT_4_M = 340.0
+# 직선거리 판정 반경은 config.yaml의 modes.*.radius_m (설계 3-2)
+_MODES = load_analysis_config()["modes"]
+STRAIGHT_2_M = _MODES["roundtrip"]["radius_m"]
+STRAIGHT_4_M = _MODES["oneway"]["radius_m"]
 
 
 # EPSG:5179 좌표를 이용한 직선거리 검색용 공간 인덱스
@@ -231,7 +230,15 @@ def main() -> None:
         action="store_true",
         help="실제 접근성 지표를 계산하고 DB에 저장합니다.",
     )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="이미 계산된 판정 결과를 다시 계산합니다 (--apply와 함께, 재실행용).",
+    )
     args = parser.parse_args()
+
+    if args.replace and not args.apply:
+        parser.error("--replace는 --apply와 함께 사용합니다.")
 
     engine = get_engine()
 
@@ -271,17 +278,26 @@ def main() -> None:
         if precheck["district_count"] != EXPECTED_DISTRICTS:
             raise RuntimeError("자치구 데이터가 25개가 아닙니다.")
 
-        if precheck["aed_count"] != EXPECTED_AED_COUNT:
-            raise RuntimeError("AED 데이터 건수가 예상과 다릅니다.")
+        # 고정 건수 대신 테이블 사이의 관계로 검사한다
+        aed_count = precheck["aed_count"]
+        grid_count = precheck["grid_count"]
 
-        if precheck["isochrone_count"] != EXPECTED_ISOCHRONE_COUNT:
-            raise RuntimeError("Isochrone 데이터 건수가 예상과 다릅니다.")
+        if aed_count == 0:
+            raise RuntimeError("AED가 0건입니다. 03_load_aed.py를 먼저 실행하세요.")
 
-        if precheck["isochrone_aed_count"] != EXPECTED_AED_COUNT:
-            raise RuntimeError("Isochrone 고유 AED 수가 일치하지 않습니다.")
+        if grid_count == 0:
+            raise RuntimeError("격자가 0건입니다. 05_generate_grid.py를 먼저 실행하세요.")
 
-        if precheck["grid_count"] != EXPECTED_GRID_COUNT:
-            raise RuntimeError("100m 격자 데이터 건수가 예상과 다릅니다.")
+        if precheck["isochrone_count"] != aed_count * 2:
+            raise RuntimeError(
+                f"Isochrone 건수 불일치: {precheck['isochrone_count']} / "
+                f"예상 {aed_count * 2} (AED {aed_count} × 2)"
+            )
+
+        if precheck["isochrone_aed_count"] != aed_count:
+            raise RuntimeError(
+                f"Isochrone 고유 AED 수 불일치: {precheck['isochrone_aed_count']} / AED {aed_count}"
+            )
 
         if invalid_isochrones != 0:
             raise RuntimeError(
@@ -289,16 +305,20 @@ def main() -> None:
             )
 
         # 모든 지표가 NULL이면 아직 계산하지 않은 상태
-        if all(value == EXPECTED_GRID_COUNT for value in null_counts.values()):
+        if all(value == grid_count for value in null_counts.values()):
             already_analyzed = False
 
         # 모든 지표에 NULL이 없으면 이미 계산된 상태
         elif all(value == 0 for value in null_counts.values()):
             already_analyzed = True
 
+        elif args.replace:
+            already_analyzed = True  # 일부만 계산된 상태도 --replace면 전부 다시 계산
+
         else:
             raise RuntimeError(
-                f"접근성 지표가 부분적으로 계산된 상태입니다: {null_counts}"
+                f"접근성 지표가 부분적으로 계산된 상태입니다: {null_counts} "
+                "(전부 다시 계산하려면 --apply --replace)"
             )
 
         print("\n===== 기존 계산 상태 =====")
@@ -310,10 +330,10 @@ def main() -> None:
             print("실제 계산하려면 --apply 옵션을 사용하세요.")
             return
 
-        if already_analyzed:
+        if already_analyzed and not args.replace:
             raise RuntimeError(
                 "접근성 지표가 이미 계산되어 있습니다. "
-                "기존 결과를 확인한 후 별도로 재계산하세요."
+                "다시 계산하려면 --replace를 함께 사용하세요."
             )
 
         # 하나의 트랜잭션으로 인덱스 생성, 분석, 검증을 수행한다.
@@ -327,19 +347,17 @@ def main() -> None:
                 PRECHECK_SQL
             ).mappings().one()
 
+            null_keys = (
+                "straight_2_null",
+                "straight_4_null",
+                "walk_2_null",
+                "walk_4_null",
+            )
             if (
-                current["grid_count"] != EXPECTED_GRID_COUNT
-                or current["aed_count"] != EXPECTED_AED_COUNT
-                or current["isochrone_count"] != EXPECTED_ISOCHRONE_COUNT
-                or any(
-                    current[key] != EXPECTED_GRID_COUNT
-                    for key in (
-                        "straight_2_null",
-                        "straight_4_null",
-                        "walk_2_null",
-                        "walk_4_null",
-                    )
-                )
+                current["grid_count"] != grid_count
+                or current["aed_count"] != aed_count
+                or current["isochrone_count"] != precheck["isochrone_count"]
+                or any(current[key] != precheck[key] for key in null_keys)
             ):
                 raise RuntimeError(
                     "실행 직전 DB 상태가 변경되었습니다. 분석을 중단합니다."
@@ -364,7 +382,7 @@ def main() -> None:
                 VERIFY_SQL
             ).mappings().one()
 
-            if verification["total"] != EXPECTED_GRID_COUNT:
+            if verification["total"] != grid_count:
                 raise RuntimeError("접근성 분석 대상 건수가 변경됐습니다.")
 
             null_keys = (

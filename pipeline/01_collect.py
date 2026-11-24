@@ -36,11 +36,11 @@ TIMEOUT = 30
 
 load_dotenv(dotenv_path=ENV_FILE)
 
-SERVICE_KEY = os.getenv("AED_API_SERVICE_KEY")
+SERVICE_KEY = os.getenv("AED_API_KEY")
 
 if not SERVICE_KEY:
     raise RuntimeError(
-        ".env 파일에서 AED_API_SERVICE_KEY를 찾을 수 없습니다."
+        ".env 파일에서 AED_API_KEY를 찾을 수 없습니다. (공공데이터포털 Decoding 키)"
     )
 
 
