@@ -35,6 +35,30 @@ PRECHECK_SQL = text("""
         (SELECT COUNT(*) FROM public.isochrone) AS isochrone_count,
         (SELECT COUNT(DISTINCT aed_id)
          FROM public.isochrone) AS isochrone_aed_count,
+
+        (SELECT COUNT(*)
+         FROM public.aed a
+         WHERE NOT EXISTS (
+             SELECT 1
+             FROM public.isochrone i
+             WHERE i.aed_id = a.id
+         )) AS failed_aed_count,
+
+        (SELECT COUNT(*)
+         FROM public.aed a
+         WHERE EXISTS (
+             SELECT 1
+             FROM public.isochrone i
+             WHERE i.aed_id = a.id
+               AND i.minutes = 2
+         )
+         AND EXISTS (
+             SELECT 1
+             FROM public.isochrone i
+             WHERE i.aed_id = a.id
+               AND i.minutes = 4
+         )) AS successful_aed_count,
+
         (SELECT COUNT(*) FROM public.grid_point) AS grid_count,
 
         (SELECT COUNT(*) FILTER (
@@ -63,9 +87,12 @@ INVALID_ISOCHRONE_SQL = text("""
         LEFT JOIN public.isochrone i ON i.aed_id = a.id
         GROUP BY a.id
         HAVING
-            COUNT(i.minutes) <> 2
-            OR COUNT(i.minutes) FILTER (WHERE i.minutes = 2) <> 1
-            OR COUNT(i.minutes) FILTER (WHERE i.minutes = 4) <> 1
+            COUNT(i.minutes) > 0
+            AND (
+                COUNT(i.minutes) <> 2
+                OR COUNT(i.minutes) FILTER (WHERE i.minutes = 2) <> 1
+                OR COUNT(i.minutes) FILTER (WHERE i.minutes = 4) <> 1
+            )
     ) AS invalid
 """)
 
@@ -79,12 +106,29 @@ UPDATE_ACCESSIBILITY_SQL = text("""
             id,
             ST_Transform(geom, 5179) AS geom_5179
         FROM public.grid_point
+    ),
+    successful_aed AS MATERIALIZED (
+        SELECT a.id
+        FROM public.aed AS a
+        WHERE EXISTS (
+            SELECT 1
+            FROM public.isochrone AS i
+            WHERE i.aed_id = a.id
+              AND i.minutes = 2
+        )
+        AND EXISTS (
+            SELECT 1
+            FROM public.isochrone AS i
+            WHERE i.aed_id = a.id
+              AND i.minutes = 4
+        )
     )
     UPDATE public.grid_point AS g
     SET
         straight_2 = EXISTS (
             SELECT 1
             FROM public.aed AS a
+            JOIN successful_aed AS s ON s.id = a.id
             WHERE ST_DWithin(
                 ST_Transform(a.geom, 5179),
                 p.geom_5179,
@@ -95,6 +139,7 @@ UPDATE_ACCESSIBILITY_SQL = text("""
         straight_4 = EXISTS (
             SELECT 1
             FROM public.aed AS a
+            JOIN successful_aed AS s ON s.id = a.id
             WHERE ST_DWithin(
                 ST_Transform(a.geom, 5179),
                 p.geom_5179,
@@ -256,11 +301,13 @@ def main() -> None:
         print("AED 접근성 분석 사전 검사")
         print("=" * 55)
         print(f"자치구: {precheck['district_count']:,}개")
-        print(f"AED: {precheck['aed_count']:,}개")
+        print(f"전체 AED: {precheck['aed_count']:,}개")
+        print(f"등시선 생성 성공 AED: {precheck['successful_aed_count']:,}개")
+        print(f"등시선 생성 실패 AED(분석 제외): {precheck['failed_aed_count']:,}개")
         print(f"Isochrone: {precheck['isochrone_count']:,}개")
         print(f"Isochrone 고유 AED: {precheck['isochrone_aed_count']:,}개")
         print(f"100m 격자: {precheck['grid_count']:,}개")
-        print(f"잘못된 AED별 Isochrone 구성: {invalid_isochrones}건")
+        print(f"불완전한 AED별 Isochrone 구성: {invalid_isochrones}건")
 
         print("\n===== 접근성 기준 =====")
         print(f"직선거리 2분: {STRAIGHT_2_M:.0f}m")
@@ -288,20 +335,35 @@ def main() -> None:
         if grid_count == 0:
             raise RuntimeError("격자가 0건입니다. 05_generate_grid.py를 먼저 실행하세요.")
 
-        if precheck["isochrone_count"] != aed_count * 2:
-            raise RuntimeError(
-                f"Isochrone 건수 불일치: {precheck['isochrone_count']} / "
-                f"예상 {aed_count * 2} (AED {aed_count} × 2)"
-            )
-
-        if precheck["isochrone_aed_count"] != aed_count:
-            raise RuntimeError(
-                f"Isochrone 고유 AED 수 불일치: {precheck['isochrone_aed_count']} / AED {aed_count}"
-            )
+        successful_aed_count = precheck["successful_aed_count"]
+        failed_aed_count = precheck["failed_aed_count"]
 
         if invalid_isochrones != 0:
             raise RuntimeError(
                 f"AED별 2분·4분 Isochrone 구성 오류: {invalid_isochrones}"
+            )
+
+        if successful_aed_count == 0:
+            raise RuntimeError("정상적인 2분·4분 Isochrone를 가진 AED가 없습니다.")
+
+        if successful_aed_count + failed_aed_count != aed_count:
+            raise RuntimeError(
+                "AED가 성공·실패 집합으로 완전히 분류되지 않았습니다: "
+                f"전체 {aed_count}, 성공 {successful_aed_count}, "
+                f"실패 {failed_aed_count}"
+            )
+
+        if precheck["isochrone_count"] != successful_aed_count * 2:
+            raise RuntimeError(
+                f"Isochrone 건수 불일치: {precheck['isochrone_count']} / "
+                f"예상 {successful_aed_count * 2} "
+                f"(성공 AED {successful_aed_count} × 2)"
+            )
+
+        if precheck["isochrone_aed_count"] != successful_aed_count:
+            raise RuntimeError(
+                "Isochrone 고유 AED 수 불일치: "
+                f"{precheck['isochrone_aed_count']} / 성공 AED {successful_aed_count}"
             )
 
         # 모든 지표가 NULL이면 아직 계산하지 않은 상태
@@ -353,14 +415,28 @@ def main() -> None:
                 "walk_2_null",
                 "walk_4_null",
             )
+            source_count_keys = (
+                "grid_count",
+                "aed_count",
+                "isochrone_count",
+                "isochrone_aed_count",
+                "successful_aed_count",
+                "failed_aed_count",
+            )
             if (
-                current["grid_count"] != grid_count
-                or current["aed_count"] != aed_count
-                or current["isochrone_count"] != precheck["isochrone_count"]
+                any(current[key] != precheck[key] for key in source_count_keys)
                 or any(current[key] != precheck[key] for key in null_keys)
             ):
                 raise RuntimeError(
                     "실행 직전 DB 상태가 변경되었습니다. 분석을 중단합니다."
+                )
+
+            current_invalid_isochrones = conn.execute(
+                INVALID_ISOCHRONE_SQL
+            ).scalar_one()
+            if current_invalid_isochrones != invalid_isochrones:
+                raise RuntimeError(
+                    "실행 직전 AED별 Isochrone 구성이 변경되었습니다."
                 )
 
             # 미터 단위 직선거리 검색 인덱스
@@ -408,6 +484,8 @@ def main() -> None:
 
         print("\n===== 접근성 분석 완료 =====")
         print(f"갱신 행: {result.rowcount:,}개")
+        print(f"직선거리·보행 공통 분석 AED: {successful_aed_count:,}개")
+        print(f"등시선 실패로 제외된 AED: {failed_aed_count:,}개")
 
         for key in (
             "straight_2",
