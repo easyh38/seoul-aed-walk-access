@@ -1,0 +1,64 @@
+name: seoul-aed-walk-access
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER가 .env에 필요합니다}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD가 .env에 필요합니다}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB가 .env에 필요합니다}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - aed-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  valhalla:
+    image: ghcr.io/valhalla/valhalla-scripted:latest
+    restart: unless-stopped
+    command: ["build_tiles"]
+    ports:
+      - "127.0.0.1:8002:8002"
+    volumes:
+      - ./valhalla/valhalla_data:/custom_files
+    environment:
+      server_threads: "1"
+      use_tiles_ignore_pbf: "True"
+      build_tar: "True"
+      serve_tiles: "True"
+      update_existing_config: "True"
+      force_rebuild: "False"
+      build_admins: "True"
+      build_time_zones: "True"
+      build_elevation: "False"
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL이 .env에 필요합니다}
+      DB_HOST: db
+      DB_PORT: "5432"
+      VALHALLA_BASE_URL: http://valhalla:8002
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      valhalla:
+        condition: service_started
+
+volumes:
+  aed-db-data:
+    external: true
+    name: aed-db-data
