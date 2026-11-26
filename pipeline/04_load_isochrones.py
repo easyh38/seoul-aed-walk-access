@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 from collections import Counter
@@ -15,6 +16,7 @@ from common import get_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INPUT_PATH = PROJECT_ROOT / "results/isochrones/aed_isochrones.jsonl"
+FAILURE_PATH = PROJECT_ROOT / "results/isochrones/isochrone_failures.csv"
 
 EXPECTED_CONTOURS = {2.0, 4.0}
 
@@ -80,6 +82,21 @@ PAIR_VERIFY_SQL = text("""
             OR COUNT(i.minutes) FILTER (WHERE i.minutes = 2) <> 1
             OR COUNT(i.minutes) FILTER (WHERE i.minutes = 4) <> 1
     ) AS invalid_pairs
+""")
+
+
+FAILED_ISOCHRONES_SQL = text("""
+    SELECT COUNT(*)
+    FROM public.isochrone i
+    JOIN public.aed a ON a.id = i.aed_id
+    WHERE a.source_id = ANY(CAST(:failed_ids AS text[]))
+""")
+
+DELETE_FAILED_ISOCHRONES_SQL = text("""
+    DELETE FROM public.isochrone i
+    USING public.aed a
+    WHERE i.aed_id = a.id
+      AND a.source_id = ANY(CAST(:failed_ids AS text[]))
 """)
 
 
@@ -220,9 +237,6 @@ def load_isochrones() -> tuple[list[dict], set[str]]:
             if contour_counts != Counter({2.0: 1, 4.0: 1}):
                 raise ValueError(f"{serial}: 2분·4분 영역 구성이 잘못되었습니다.")
 
-    if not source_ids:
-        raise ValueError("JSONL에 AED 등시선이 없습니다.")
-
     # AED마다 2분·4분 두 개
     if len(rows) != len(source_ids) * 2:
         raise ValueError(
@@ -230,6 +244,70 @@ def load_isochrones() -> tuple[list[dict], set[str]]:
         )
 
     return rows, source_ids
+
+
+def load_failures(path: Path = FAILURE_PATH) -> dict[str, dict]:
+    """Valhalla 등시선 생성 실패 목록을 읽고 검증한다."""
+
+    if not path.exists():
+        raise FileNotFoundError(f"Isochrone 실패 목록이 없습니다: {path}")
+
+    failures = {}
+
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        required_fields = {"serialSeq", "attempts", "error"}
+
+        if not required_fields.issubset(set(reader.fieldnames or [])):
+            raise ValueError("Isochrone 실패 CSV의 필수 컬럼이 부족합니다.")
+
+        for line_number, row in enumerate(reader, start=2):
+            serial = (row.get("serialSeq") or "").strip()
+
+            if not serial:
+                raise ValueError(
+                    f"실패 CSV {line_number}행: AED 식별자가 없습니다."
+                )
+
+            if serial in failures:
+                raise ValueError(f"중복 실패 AED 식별자: {serial}")
+
+            try:
+                attempts = int(row.get("attempts") or "")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{serial}: 재시도 횟수가 올바르지 않습니다."
+                ) from exc
+
+            if attempts < 1:
+                raise ValueError(f"{serial}: 재시도 횟수는 1 이상이어야 합니다.")
+
+            if not (row.get("error") or "").strip():
+                raise ValueError(f"{serial}: 실패 사유가 비어 있습니다.")
+
+            failures[serial] = row
+
+    return failures
+
+
+def validate_aed_status(
+    db_ids: set[str],
+    success_ids: set[str],
+    failed_ids: set[str],
+) -> None:
+    """DB의 모든 AED가 성공 또는 실패 목록 중 하나에 정확히 속하는지 검사한다."""
+
+    overlap = success_ids & failed_ids
+    unclassified = db_ids - success_ids - failed_ids
+    unknown = (success_ids | failed_ids) - db_ids
+
+    if overlap or unclassified or unknown:
+        raise RuntimeError(
+            "AED 등시선 처리 상태가 DB와 일치하지 않습니다. "
+            f"성공·실패 중복={len(overlap)}, "
+            f"처리 상태 누락={len(unclassified)}, "
+            f"DB에 없는 식별자={len(unknown)}"
+        )
 
 
 def main() -> None:
@@ -246,42 +324,27 @@ def main() -> None:
     engine = get_engine()
 
     try:
-        rows, source_ids = load_isochrones()
-        sorted_ids = sorted(source_ids)
+        rows, success_ids = load_isochrones()
+        failures = load_failures()
+        failed_ids = set(failures)
+        sorted_success_ids = sorted(success_ids)
+        sorted_failed_ids = sorted(failed_ids)
 
         with engine.connect() as conn:
-            db_aed_count = conn.execute(
-                text("SELECT COUNT(*) FROM public.aed")
-            ).scalar_one()
-
             db_rows = conn.execute(
                 text("""
                     SELECT id, source_id
                     FROM public.aed
-                    WHERE source_id = ANY(CAST(:source_ids AS text[]))
                 """),
-                {"source_ids": sorted_ids},
             ).mappings().all()
 
             id_map = {
                 row["source_id"]: row["id"]
                 for row in db_rows
             }
-
             db_ids = set(id_map)
 
-            # 등시선 JSONL과 DB의 AED 수가 같아야 한다 (등시선 실패 AED가 있으면 여기서 멈춘다)
-            if db_aed_count != len(source_ids):
-                raise RuntimeError(
-                    f"DB AED 건수 불일치: DB {db_aed_count} / JSONL {len(source_ids)}"
-                )
-
-            if db_ids != source_ids:
-                raise RuntimeError(
-                    "JSONL과 DB의 AED 식별자가 일치하지 않습니다. "
-                    f"DB 누락: {len(source_ids - db_ids)}, "
-                    f"JSONL 누락: {len(db_ids - source_ids)}"
-                )
+            validate_aed_status(db_ids, success_ids, failed_ids)
 
             existing_count = conn.execute(
                 text("""
@@ -290,17 +353,24 @@ def main() -> None:
                     JOIN public.aed a ON a.id = i.aed_id
                     WHERE a.source_id = ANY(CAST(:source_ids AS text[]))
                 """),
-                {"source_ids": sorted_ids},
+                {"source_ids": sorted_success_ids},
+            ).scalar_one()
+
+            failed_existing_count = conn.execute(
+                FAILED_ISOCHRONES_SQL,
+                {"failed_ids": sorted_failed_ids},
             ).scalar_one()
 
         print("=" * 50)
         print("Isochrone DB 적재 사전 검사")
         print("=" * 50)
-        print(f"JSONL 고유 AED: {len(source_ids):,}건")
-        print(f"DB AED: {db_aed_count:,}건")
-        print(f"식별자 일치: {len(db_ids):,}건")
+        print(f"DB 전체 AED: {len(db_ids):,}건")
+        print(f"등시선 생성 성공 AED: {len(success_ids):,}건")
+        print(f"등시선 생성 실패 AED: {len(failed_ids):,}건")
+        print("성공·실패 식별자 분류: 일치")
         print(f"적재 대상 영역: {len(rows):,}개")
-        print(f"기존 Isochrone: {existing_count:,}개")
+        print(f"기존 성공 AED 등시선: {existing_count:,}개")
+        print(f"실패 AED에 남아 있는 기존 등시선: {failed_existing_count:,}개")
 
         if not args.apply:
             print("\n미리보기 완료. DB는 변경하지 않았습니다.")
@@ -316,33 +386,66 @@ def main() -> None:
             for row in rows
         ]
 
-        # 모든 영역을 하나의 트랜잭션으로 적재한다.
+        # 모든 영역 적재와 실패 AED 정리를 하나의 트랜잭션으로 처리한다.
+        deleted_failed = 0
+
         with engine.begin() as conn:
-            conn.execute(UPSERT_SQL, insert_rows)
+            # 실행 직전 DB AED 집합을 다시 검사한다.
+            current_db_ids = set(
+                conn.execute(
+                    text("SELECT source_id FROM public.aed")
+                ).scalars().all()
+            )
+            validate_aed_status(
+                current_db_ids,
+                success_ids,
+                failed_ids,
+            )
+
+            # 실패 AED에 예전 등시선이 남아 있다면 제거한다.
+            if failed_ids:
+                deleted_failed = conn.execute(
+                    DELETE_FAILED_ISOCHRONES_SQL,
+                    {"failed_ids": sorted_failed_ids},
+                ).rowcount
+
+            # 성공 AED의 2분·4분 등시선만 적재한다.
+            if insert_rows:
+                conn.execute(UPSERT_SQL, insert_rows)
 
             verification = conn.execute(
                 VERIFY_SQL,
-                {"source_ids": sorted_ids},
+                {"source_ids": sorted_success_ids},
             ).mappings().one()
 
             invalid_pairs = conn.execute(
                 PAIR_VERIFY_SQL,
-                {"source_ids": sorted_ids},
+                {"source_ids": sorted_success_ids},
             ).scalar_one()
 
-            if verification["total"] != len(source_ids) * 2:
+            failed_remaining = conn.execute(
+                FAILED_ISOCHRONES_SQL,
+                {"failed_ids": sorted_failed_ids},
+            ).scalar_one()
+
+            if verification["total"] != len(success_ids) * 2:
                 raise RuntimeError(
                     f"Isochrone 전체 건수 오류: {dict(verification)}"
                 )
 
-            if verification["unique_aed"] != len(source_ids):
+            if verification["unique_aed"] != len(success_ids):
                 raise RuntimeError("Isochrone AED 식별자 개수가 일치하지 않습니다.")
 
             if (
-                verification["two_minutes"] != len(source_ids)
-                or verification["four_minutes"] != len(source_ids)
+                verification["two_minutes"] != len(success_ids)
+                or verification["four_minutes"] != len(success_ids)
             ):
                 raise RuntimeError("2분·4분 영역 개수가 일치하지 않습니다.")
+
+            if failed_remaining != 0:
+                raise RuntimeError(
+                    f"실패 AED에 등시선이 남아 있습니다: {failed_remaining}개"
+                )
 
             invalid_counts = {
                 key: verification[key]
@@ -363,7 +466,9 @@ def main() -> None:
 
         print("\n===== Isochrone 적재 완료 =====")
         print(f"적재·갱신 영역: {len(rows):,}개")
-        print(f"대상 AED: {verification['unique_aed']:,}개")
+        print(f"등시선 생성 성공 AED: {verification['unique_aed']:,}개")
+        print(f"등시선 생성 실패 AED: {len(failed_ids):,}개")
+        print(f"실패 AED에서 제거한 기존 등시선: {deleted_failed:,}개")
         print(f"2분 영역: {verification['two_minutes']:,}개")
         print(f"4분 영역: {verification['four_minutes']:,}개")
         print("NULL Geometry: 0")
