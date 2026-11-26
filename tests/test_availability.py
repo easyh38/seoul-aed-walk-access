@@ -221,3 +221,61 @@ def test_unknown_reason_when_previous_day_hours_missing():
     assert result.reason == "previous_day_schedule_unknown"
     assert result.today_schedule_reason == "hours_valid"
     assert result.previous_day_schedule_reason == "hours_missing"
+
+
+def test_missing_hours_policy_open():
+    from pipeline.availability import get_availability_detail
+
+    record = make_record(monSttTme="", monEndTme="")
+    result = get_availability_detail(
+        record,
+        datetime(2026, 11, 23, 10, 0),
+        missing_policy="open",
+    )
+
+    assert result.status == "available"
+    assert result.reason == "today_schedule_assumed_open_by_policy"
+    assert result.today_schedule_reason == "hours_missing_policy_open"
+
+
+def test_missing_hours_policy_closed():
+    from pipeline.availability import get_availability_detail
+
+    record = make_record(monSttTme="", monEndTme="")
+    result = get_availability_detail(
+        record,
+        datetime(2026, 11, 23, 10, 0),
+        missing_policy="closed",
+    )
+
+    assert result.status == "unavailable"
+    assert result.today_schedule_reason == "hours_missing_policy_closed"
+
+
+def test_invalid_hours_policy_closed():
+    from pipeline.availability import get_availability_detail
+
+    record = make_record(monSttTme="0900", monEndTme="0900")
+    result = get_availability_detail(
+        record,
+        datetime(2026, 11, 23, 10, 0),
+        invalid_policy="closed",
+    )
+
+    assert result.status == "unavailable"
+    assert result.today_schedule_reason == "hours_invalid_policy_closed"
+
+
+def test_overnight_disabled_uses_invalid_policy():
+    from pipeline.availability import get_availability_detail
+
+    record = make_record(monSttTme="2200", monEndTme="0600")
+    result = get_availability_detail(
+        record,
+        datetime(2026, 11, 23, 23, 0),
+        allow_overnight=False,
+        invalid_policy="closed",
+    )
+
+    assert result.status == "unavailable"
+    assert result.today_schedule_reason == "hours_invalid_policy_closed"

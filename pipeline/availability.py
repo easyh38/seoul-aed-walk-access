@@ -46,6 +46,10 @@ def _get_schedule(
     target_date: date,
     *,
     is_holiday: bool,
+    missing_policy: Literal["open", "closed", "unknown"],
+    invalid_policy: Literal["open", "closed", "unknown"],
+    allow_overnight: bool,
+    max_duration_minutes: int,
 ) -> tuple[ScheduleStatus, tuple[int, int] | None, str]:
     """특정 날짜의 운영시간과 정보 상태를 반환한다."""
 
@@ -90,6 +94,8 @@ def _get_schedule(
     result = classify_hours_pair(
         record.get(start_field),
         record.get(end_field),
+        allow_overnight=allow_overnight,
+        max_duration_minutes=max_duration_minutes,
     )
 
     if result.status == "missing":
@@ -100,6 +106,10 @@ def _get_schedule(
         else:
             reason = "hours_missing"
 
+        if missing_policy == "open":
+            return "valid", (0, 1440), f"{reason}_policy_open"
+        if missing_policy == "closed":
+            return "closed", None, f"{reason}_policy_closed"
         return "unknown", None, reason
 
     if result.status == "invalid" or result.interval is None:
@@ -110,6 +120,10 @@ def _get_schedule(
         else:
             reason = "hours_invalid"
 
+        if invalid_policy == "open":
+            return "valid", (0, 1440), f"{reason}_policy_open"
+        if invalid_policy == "closed":
+            return "closed", None, f"{reason}_policy_closed"
         return "unknown", None, reason
 
     return "valid", result.interval, "hours_valid"
@@ -121,11 +135,31 @@ def get_availability_detail(
     *,
     is_holiday: bool = False,
     previous_day_is_holiday: bool = False,
+    missing_policy: Literal["open", "closed", "unknown"] = "unknown",
+    invalid_policy: Literal["open", "closed", "unknown"] = "unknown",
+    allow_overnight: bool = True,
+    max_duration_minutes: int = 1440,
 ) -> AvailabilityResult:
     """특정 시각의 이용 가능 여부와 판정 원인을 반환한다."""
 
     if not isinstance(when, datetime):
         raise TypeError("when은 datetime 객체여야 합니다.")
+
+    if missing_policy not in ("open", "closed", "unknown"):
+        raise ValueError("missing_policy는 open, closed, unknown 중 하나여야 합니다.")
+
+    if invalid_policy not in ("open", "closed", "unknown"):
+        raise ValueError("invalid_policy는 open, closed, unknown 중 하나여야 합니다.")
+
+    if not isinstance(allow_overnight, bool):
+        raise ValueError("allow_overnight는 bool이어야 합니다.")
+
+    if (
+        isinstance(max_duration_minutes, bool)
+        or not isinstance(max_duration_minutes, int)
+        or not 1 <= max_duration_minutes <= 1440
+    ):
+        raise ValueError("max_duration_minutes는 1~1440 사이의 정수여야 합니다.")
 
     today = when.date()
     current_minute = when.hour * 60 + when.minute
@@ -134,6 +168,10 @@ def get_availability_detail(
         record,
         today,
         is_holiday=is_holiday,
+        missing_policy=missing_policy,
+        invalid_policy=invalid_policy,
+        allow_overnight=allow_overnight,
+        max_duration_minutes=max_duration_minutes,
     )
 
     yesterday = today - timedelta(days=1)
@@ -142,6 +180,10 @@ def get_availability_detail(
         record,
         yesterday,
         is_holiday=previous_day_is_holiday,
+        missing_policy=missing_policy,
+        invalid_policy=invalid_policy,
+        allow_overnight=allow_overnight,
+        max_duration_minutes=max_duration_minutes,
     )
 
     # 당일 운영시간에 현재 시각이 포함되는 경우
@@ -151,7 +193,11 @@ def get_availability_detail(
         if start <= current_minute < end:
             return AvailabilityResult(
                 "available",
-                "today_schedule_active",
+                (
+                    "today_schedule_assumed_open_by_policy"
+                    if today_reason.endswith("_policy_open")
+                    else "today_schedule_active"
+                ),
                 today_reason,
                 yesterday_reason,
             )
@@ -208,6 +254,10 @@ def get_availability(
     *,
     is_holiday: bool = False,
     previous_day_is_holiday: bool = False,
+    missing_policy: Literal["open", "closed", "unknown"] = "unknown",
+    invalid_policy: Literal["open", "closed", "unknown"] = "unknown",
+    allow_overnight: bool = True,
+    max_duration_minutes: int = 1440,
 ) -> Availability:
     """기존 코드와 호환되는 이용 가능 여부 판정 함수."""
 
@@ -216,4 +266,8 @@ def get_availability(
         when,
         is_holiday=is_holiday,
         previous_day_is_holiday=previous_day_is_holiday,
+        missing_policy=missing_policy,
+        invalid_policy=invalid_policy,
+        allow_overnight=allow_overnight,
+        max_duration_minutes=max_duration_minutes,
     ).status

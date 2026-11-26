@@ -6,10 +6,13 @@ import argparse
 import csv
 import json
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import holidays
+
 from pipeline.availability import get_availability_detail
+from pipeline.common import load_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +45,103 @@ def parse_datetime(value: str | None) -> datetime:
     return result.astimezone(SEOUL_TZ)
 
 
+def resolve_holiday_flags(
+    analysis_date: date,
+    *,
+    force_today: bool = False,
+    force_previous_day: bool = False,
+) -> dict:
+    """한국 공휴일 달력으로 분석 당일과 전날의 공휴일 여부를 판정한다."""
+
+    if not isinstance(analysis_date, date) or isinstance(analysis_date, datetime):
+        raise TypeError("analysis_date는 date 객체여야 합니다.")
+
+    previous_date = analysis_date - timedelta(days=1)
+
+    calendar = holidays.country_holidays(
+        "KR",
+        years=sorted({analysis_date.year, previous_date.year}),
+        language="ko",
+    )
+
+    today_name = calendar.get(analysis_date)
+    previous_name = calendar.get(previous_date)
+
+    today_is_holiday = bool(today_name) or force_today
+    previous_is_holiday = bool(previous_name) or force_previous_day
+
+    return {
+        "is_holiday": today_is_holiday,
+        "previous_day_is_holiday": previous_is_holiday,
+        "assumptions": {
+            "country": "KR",
+            "library": "holidays",
+            "analysis_date": {
+                "date": analysis_date.isoformat(),
+                "is_holiday": today_is_holiday,
+                "holiday_name": today_name,
+                "manual_override": force_today,
+            },
+            "previous_date": {
+                "date": previous_date.isoformat(),
+                "is_holiday": previous_is_holiday,
+                "holiday_name": previous_name,
+                "manual_override": force_previous_day,
+            },
+        },
+    }
+
+
+def load_operating_hours_config() -> dict:
+    """config.yaml의 운영시간 정책을 읽고 검증한다."""
+
+    config = load_config()
+
+    missing_policy = config.get("hours_missing_policy")
+    invalid_policy = config.get("hours_invalid_policy")
+
+    if missing_policy not in ("open", "closed"):
+        raise ValueError(
+            "config.yaml hours_missing_policy는 open 또는 closed여야 합니다."
+        )
+
+    if invalid_policy not in ("open", "closed"):
+        raise ValueError(
+            "config.yaml hours_invalid_policy는 open 또는 closed여야 합니다."
+        )
+
+    operating_hours = config.get("operating_hours")
+
+    if not isinstance(operating_hours, dict):
+        raise ValueError(
+            "config.yaml operating_hours는 딕셔너리 형식이어야 합니다."
+        )
+
+    allow_overnight = operating_hours.get("allow_overnight")
+    max_duration = operating_hours.get("max_duration_minutes")
+
+    if not isinstance(allow_overnight, bool):
+        raise ValueError(
+            "config.yaml allow_overnight는 true 또는 false여야 합니다."
+        )
+
+    if (
+        isinstance(max_duration, bool)
+        or not isinstance(max_duration, int)
+        or not 1 <= max_duration <= 1440
+    ):
+        raise ValueError(
+            "config.yaml max_duration_minutes는 1~1440 사이의 정수여야 합니다."
+        )
+
+    return {
+        "missing_policy": missing_policy,
+        "invalid_policy": invalid_policy,
+        "allow_overnight": allow_overnight,
+        "max_duration_minutes": max_duration,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="전체 AED의 날짜·시각별 이용 가능 여부 분석"
@@ -57,13 +157,13 @@ def main() -> None:
     parser.add_argument(
         "--holiday",
         action="store_true",
-        help="분석 날짜가 공휴일인 경우 지정",
+        help="자동 판정과 별도로 분석 날짜를 공휴일로 수동 지정",
     )
 
     parser.add_argument(
         "--previous-day-holiday",
         action="store_true",
-        help="분석 전날이 공휴일인 경우 지정",
+        help="자동 판정과 별도로 분석 전날을 공휴일로 수동 지정",
     )
 
     args = parser.parse_args()
@@ -74,6 +174,12 @@ def main() -> None:
         )
 
     analysis_time = parse_datetime(args.analysis_datetime)
+    operating_hours_config = load_operating_hours_config()
+    holiday_flags = resolve_holiday_flags(
+        analysis_time.date(),
+        force_today=args.holiday,
+        force_previous_day=args.previous_day_holiday,
+    )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -124,8 +230,9 @@ def main() -> None:
                     result = get_availability_detail(
                         row,
                         analysis_time,
-                        is_holiday=args.holiday,
-                        previous_day_is_holiday=args.previous_day_holiday,
+                        is_holiday=holiday_flags["is_holiday"],
+                        previous_day_is_holiday=holiday_flags["previous_day_is_holiday"],
+                        **operating_hours_config,
                     )
 
                     status = result.status
@@ -176,13 +283,12 @@ def main() -> None:
         },
         "unknown_reason_counts": dict(unknown_causes),
         "error_count": error_count,
-        "holiday_assumptions": {
-            "analysis_date_is_holiday": args.holiday,
-            "previous_date_is_holiday": args.previous_day_holiday,
-        },
+        "operating_hours_policy": operating_hours_config,
+        "holiday_assumptions": holiday_flags["assumptions"],
         "warnings": [
             "일요일 플래그의 첫째~다섯째 일요일 해석은 잠정 규칙입니다.",
-            "공휴일 여부는 실행 옵션으로 전달한 값만 적용합니다.",
+            "한국 공휴일은 holidays 라이브러리로 자동 판정하며, --holiday 및 --previous-day-holiday 옵션으로 수동 지정할 수 있습니다.",
+            "새로 지정된 임시공휴일은 holidays 라이브러리 데이터 갱신 전까지 자동 판정되지 않을 수 있습니다.",
             "분석 결과는 등록된 운영시간에 따른 참고 정보이며 실제 현장 운영을 보증하지 않습니다.",
         ],
     }
@@ -194,6 +300,17 @@ def main() -> None:
     print("AED 이용 가능 여부 분석 완료")
     print("=" * 50)
     print(f"분석 시점: {analysis_time.isoformat()}")
+    holiday_info = holiday_flags["assumptions"]
+    today_info = holiday_info["analysis_date"]
+    previous_info = holiday_info["previous_date"]
+    print(
+        f"당일 공휴일: {today_info['is_holiday']} "
+        f"({today_info['holiday_name'] or '자동 달력상 공휴일 아님'})"
+    )
+    print(
+        f"전날 공휴일: {previous_info['is_holiday']} "
+        f"({previous_info['holiday_name'] or '자동 달력상 공휴일 아님'})"
+    )
     print(f"전체 AED: {total:,}건")
 
     for status in STATUSES:

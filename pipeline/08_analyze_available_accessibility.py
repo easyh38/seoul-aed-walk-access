@@ -32,6 +32,7 @@ SEOUL_TZ = timezone(timedelta(hours=9), name="Asia/Seoul")
 EXPECTED_DISTRICTS = 25  # 서울 자치구 수 (데이터가 바뀌어도 고정)
 
 SCENARIOS = ("available", "available_or_unknown")
+FAILURE_PATH = ROOT / "results" / "isochrones" / "isochrone_failures.csv"
 
 RESULT_COLUMNS = (
     "analysis_datetime", "scenario", "scope",
@@ -67,12 +68,29 @@ INVALID_ISOCHRONE_SQL = text("""
         SELECT a.id
         FROM public.aed a
         LEFT JOIN public.isochrone i ON i.aed_id = a.id
+        WHERE a.source_id <> ALL(CAST(:failed_ids AS text[]))
         GROUP BY a.id
         HAVING
             COUNT(i.minutes) <> 2
             OR COUNT(i.minutes) FILTER (WHERE i.minutes = 2) <> 1
             OR COUNT(i.minutes) FILTER (WHERE i.minutes = 4) <> 1
     ) AS invalid
+""")
+
+
+FAILED_AED_STATUS_SQL = text("""
+    SELECT
+        (
+            SELECT COUNT(*)
+            FROM public.aed
+            WHERE source_id = ANY(CAST(:failed_ids AS text[]))
+        ) AS failed_aed_count,
+        (
+            SELECT COUNT(*)
+            FROM public.isochrone i
+            JOIN public.aed a ON a.id = i.aed_id
+            WHERE a.source_id = ANY(CAST(:failed_ids AS text[]))
+        ) AS failed_isochrone_count
 """)
 
 
@@ -133,6 +151,7 @@ CREATE_SCENARIO_AED_SQL = text("""
     JOIN public.isochrone i
         ON i.aed_id = a.id AND i.minutes = 4
     WHERE v.availability_status = 'available'
+        AND a.source_id <> ALL(CAST(:failed_ids AS text[]))
 
     UNION ALL
 
@@ -148,6 +167,7 @@ CREATE_SCENARIO_AED_SQL = text("""
     JOIN public.isochrone i
         ON i.aed_id = a.id AND i.minutes = 4
     WHERE v.availability_status IN ('available', 'unknown')
+        AND a.source_id <> ALL(CAST(:failed_ids AS text[]))
 """)
 
 
@@ -495,6 +515,50 @@ def resolve_availability_files(at: str | None, csv_path: str | None) -> tuple[Pa
     return availability_csv, availability_summary
 
 
+def load_failed_ids(path: Path = FAILURE_PATH) -> set[str]:
+    """04단계와 같은 규칙으로 등시선 실패 AED 목록을 검증한다."""
+
+    if not path.exists():
+        raise FileNotFoundError(f"Isochrone 실패 목록이 없습니다: {path}")
+
+    failures = set()
+
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        required_fields = {"serialSeq", "attempts", "error"}
+
+        if not required_fields.issubset(set(reader.fieldnames or [])):
+            raise ValueError("Isochrone 실패 CSV의 필수 컬럼이 부족합니다.")
+
+        for line_number, row in enumerate(reader, start=2):
+            serial = (row.get("serialSeq") or "").strip()
+
+            if not serial:
+                raise ValueError(
+                    f"실패 CSV {line_number}행: AED 식별자가 없습니다."
+                )
+
+            if serial in failures:
+                raise ValueError(f"중복 실패 AED 식별자: {serial}")
+
+            try:
+                attempts = int(row.get("attempts") or "")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{serial}: 재시도 횟수가 올바르지 않습니다."
+                ) from exc
+
+            if attempts < 1:
+                raise ValueError(f"{serial}: 재시도 횟수는 1 이상이어야 합니다.")
+
+            if not (row.get("error") or "").strip():
+                raise ValueError(f"{serial}: 실패 사유가 비어 있습니다.")
+
+            failures.add(serial)
+
+    return failures
+
+
 def load_availability(
     availability_csv: Path, availability_summary: Path
 ) -> tuple[list[dict], Counter, datetime, dict]:
@@ -623,6 +687,15 @@ def main() -> None:
         load_availability(availability_csv, availability_summary)
     )
 
+    failed_ids = load_failed_ids()
+    failed_id_list = sorted(failed_ids)
+
+    failed_status_counts = Counter(
+        row['availability_status']
+        for row in availability_rows
+        if row['source_id'] in failed_ids
+    )
+
     source_ids = sorted(
         row["source_id"] for row in availability_rows
     )
@@ -636,8 +709,14 @@ def main() -> None:
             ).mappings().one()
 
             invalid_pairs = conn.execute(
-                INVALID_ISOCHRONE_SQL
+                INVALID_ISOCHRONE_SQL,
+                {"failed_ids": failed_id_list},
             ).scalar_one()
+
+            failed_status = conn.execute(
+                FAILED_AED_STATUS_SQL,
+                {"failed_ids": failed_id_list},
+            ).mappings().one()
 
             db_ids = set(
                 conn.execute(
@@ -651,6 +730,24 @@ def main() -> None:
             )
 
         # 고정 건수 대신 DB 테이블과 운영 여부 CSV 사이의 관계로 검사한다
+        if failed_status['failed_aed_count'] != len(failed_ids):
+            raise RuntimeError(
+                "실패 CSV와 DB의 AED 식별자가 일치하지 않습니다. "
+                f"CSV={len(failed_ids)}, DB={failed_status['failed_aed_count']}"
+            )
+
+        if failed_status['failed_isochrone_count'] != 0:
+            raise RuntimeError(
+                "등시선 생성 실패 AED에 등시선 데이터가 남아 있습니다: "
+                f"{failed_status['failed_isochrone_count']}건"
+            )
+
+        expected_success_isochrones = (
+            precheck['aed_count'] - len(failed_ids)
+        )
+        if expected_success_isochrones <= 0:
+            raise RuntimeError("등시선 생성 성공 AED가 0건입니다.")
+
         if precheck["district_count"] != EXPECTED_DISTRICTS:
             raise RuntimeError("자치구 수가 25개가 아닙니다.")
 
@@ -659,10 +756,10 @@ def main() -> None:
                 f"DB AED 수({precheck['aed_count']})와 운영 여부 CSV({len(availability_rows)})가 다릅니다."
             )
 
-        if precheck["four_minute_isochrones"] != precheck["aed_count"]:
+        if precheck["four_minute_isochrones"] != expected_success_isochrones:
             raise RuntimeError(
                 f"4분 Isochrone 수({precheck['four_minute_isochrones']})가 "
-                f"AED 수({precheck['aed_count']})와 다릅니다."
+                f"등시선 성공 AED 수({expected_success_isochrones})와 다릅니다."
             )
 
         if precheck["grid_count"] == 0:
@@ -684,9 +781,18 @@ def main() -> None:
         unknown_count = status_counts["unknown"]
         unavailable_count = status_counts["unavailable"]
 
+        available_success_count = (
+            available_count - failed_status_counts['available']
+        )
+        unknown_success_count = (
+            unknown_count - failed_status_counts['unknown']
+        )
+
         scenario_counts = {
-            "available": available_count,
-            "available_or_unknown": available_count + unknown_count,
+            "available": available_success_count,
+            "available_or_unknown": (
+                available_success_count + unknown_success_count
+            ),
         }
 
         print("=" * 55)
@@ -696,6 +802,8 @@ def main() -> None:
         print(f"분석 기준 시각: {analysis_datetime.isoformat()}")
         print(f"DB AED: {precheck['aed_count']:,}개")
         print(f"운영시간 결과: {len(availability_rows):,}개")
+        print(f"등시선 성공 AED: {expected_success_isochrones:,}개")
+        print(f"등시선 실패 AED (공간 분석 제외): {len(failed_ids):,}개")
         print(f"DB 식별자 일치: {len(db_ids):,}개")
         print(f"전체 AED 기준 격자: {precheck['grid_count']:,}개")
         print(f"잘못된 Isochrone 구성: {invalid_pairs}건")
@@ -743,6 +851,29 @@ def main() -> None:
             if current["incomplete_grid"] != 0:
                 raise RuntimeError("실행 직전 미계산 격자가 생겼습니다.")
 
+            current_failed_status = conn.execute(
+                FAILED_AED_STATUS_SQL,
+                {"failed_ids": failed_id_list},
+            ).mappings().one()
+
+            if (
+                current_failed_status["failed_aed_count"] != len(failed_ids)
+                or current_failed_status["failed_isochrone_count"] != 0
+            ):
+                raise RuntimeError(
+                    "실행 직전 실패 AED의 DB 상태가 변경됐습니다: "
+                    f"{dict(current_failed_status)}"
+                )
+
+            current_invalid_pairs = conn.execute(
+                INVALID_ISOCHRONE_SQL,
+                {"failed_ids": failed_id_list},
+            ).scalar_one()
+            if current_invalid_pairs != 0:
+                raise RuntimeError(
+                    f"실행 직전 성공 AED의 등시선 구성 오류: {current_invalid_pairs}건"
+                )
+
             conn.execute(CREATE_AVAILABILITY_TEMP_SQL)
             conn.execute(
                 INSERT_AVAILABILITY_TEMP_SQL,
@@ -758,7 +889,10 @@ def main() -> None:
                     f"운영시간 식별자 검증 실패: {dict(id_check)}"
                 )
 
-            conn.execute(CREATE_SCENARIO_AED_SQL)
+            conn.execute(
+                CREATE_SCENARIO_AED_SQL,
+                {"failed_ids": failed_id_list},
+            )
             conn.execute(CREATE_SCENARIO_AED_COUNTS_SQL)
             conn.execute(CREATE_SCENARIO_UNION_SQL)
             conn.execute(CREATE_GRID_5179_SQL)
@@ -794,10 +928,10 @@ def main() -> None:
             }
 
             expected_scenarios = {
-                "available": (available_count, 0),
+                "available": (available_success_count, 0),
                 "available_or_unknown": (
-                    available_count + unknown_count,
-                    unknown_count,
+                    available_success_count + unknown_success_count,
+                    unknown_success_count,
                 ),
             }
 
