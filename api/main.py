@@ -1,4 +1,7 @@
-"""FastAPI 앱. 실행: uvicorn api.main:app --reload --port 8000 → http://localhost:8000/docs"""
+"""FastAPI 앱. 실행: uvicorn api.main:app --reload --no-access-log --port 8000 → http://localhost:8000/docs
+
+--no-access-log: /api/nearest?lat=..&lon=..의 클릭 좌표가 터미널 기록에 남지 않게 한다 (PRD 8-6).
+"""
 
 from pathlib import Path
 
