@@ -42,7 +42,7 @@ def fake_query(monkeypatch):
 
     def _fake(sql, **params):
         calls.append(params)
-        return [] if state["empty"] else _fc_row(params["mode"], params["kind"])
+        return [] if state["empty"] else _fc_row(params["mode"], params.get("kind", "coverage"))
 
     monkeypatch.setattr(layers_router, "query", _fake)
     return calls, state
@@ -99,3 +99,43 @@ def test_unknown_layer_kind_is_404(fake_query):
 
     assert res.status_code == 404
     assert calls == []
+
+
+# ---- open_now ----
+
+@pytest.fixture
+def fake_open(monkeypatch, fake_query):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from api.open_now import Coverage
+
+    start = datetime(2026, 11, 25, 14, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    seen = []
+
+    def _coverage(mode, when):
+        seen.append(mode)
+        key = {"weekday": 2, "slot": 28, "mode": mode, "is_holiday": False}
+        return Coverage(key, 60.0, 11000, start, False, cache_hit=True)
+
+    monkeypatch.setattr(layers_router, "coverage_at", _coverage)
+    return fake_query, seen
+
+
+@pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize("mode", MODES)
+def test_open_now_reads_coverage_cache(fake_open, kind, mode):
+    (calls, _), seen = fake_open
+    res = client.get(f"/api/layers/{kind}", params={"mode": mode, "open_now": "true"})
+
+    assert res.status_code == 200
+    assert seen == [mode]
+    assert calls == [{"weekday": 2, "slot": 28, "mode": mode, "is_holiday": False,
+                      "at": "2026-11-25T14:00+09:00"}]
+
+
+def test_open_now_off_uses_precomputed_layer(fake_open):
+    (calls, _), seen = fake_open
+    client.get("/api/layers/coverage", params={"mode": "oneway"})
+    assert seen == []
+    assert calls == [{"mode": "oneway", "kind": "coverage"}]

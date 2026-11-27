@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY api/ /app/api/
 # 보행 속도 등 파이프라인과 같은 설정 (api/config.py가 읽는다)
 COPY config.yaml /app/config.yaml
+# open_now: 운영 여부·공휴일 판정을 3단계 파이프라인과 같은 코드로 한다 (api/open_now.py)
+COPY pipeline/hours.py pipeline/availability.py pipeline/analyze_availability.py pipeline/common.py /app/pipeline/
 
 EXPOSE 8000
 

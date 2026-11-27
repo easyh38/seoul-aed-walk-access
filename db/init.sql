@@ -62,6 +62,7 @@ CREATE TABLE coverage_cache ( -- 실시간 반영 30분 캐시
     weekday INT, slot INT, mode TEXT, is_holiday BOOLEAN,
     coverage geometry(MultiPolygon, 4326),
     walk_pct NUMERIC,
+    aed_set_hash TEXT, -- 계산에 쓴 운영 중 AED 집합의 해시. 같은 키라도 집합이 다르면 다시 계산 (api/open_now.py)
     PRIMARY KEY (weekday, slot, mode, is_holiday)
 );
 

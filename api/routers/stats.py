@@ -5,6 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 
 from api.db import query
+from api.open_now import coverage_at, now_seoul
 
 router = APIRouter(prefix="/api", tags=["stats"])
 
@@ -27,12 +28,16 @@ def stats(
     mode: Literal["oneway", "roundtrip"] = Query(
         "oneway", description="oneway: 편도 4분 / roundtrip: 왕복 기준(편도 2분)"
     ),
+    open_now: bool = Query(
+        False, description="true면 지금 운영 중인 AED 기준 서울 전체 walk_pct를 open_now에 추가"
+    ),
 ):
     """가장 최근 실행의 서울 전체 요약과 25개 자치구 순위를 돌려준다.
 
     최근 실행은 pipeline_run이 아니라 metrics에서 고른다.
     지표를 만들지 않는 스크립트(08 등)도 pipeline_run에 기록을 남기기 때문이다.
-    open_now(현재 시각 커버리지)는 4-2 구현 순서 7번에서 추가한다.
+    open_now=true면 지금(30분 구간) 운영 중인 AED만으로 계산한 서울 전체 walk_pct를
+    "open_now"에 함께 준다. 자치구별 값은 coverage_cache에 없어서 전체 AED 기준만 있다.
     """
     rows = query(
         """
@@ -62,7 +67,7 @@ def stats(
         key=lambda r: (-(r["walk_pct"] or 0), r["scope"]),
     )
 
-    return {
+    result = {
         "run_id": rows[0]["run_id"],
         "run_at": rows[0]["run_at"],
         "mode": mode,
@@ -72,3 +77,14 @@ def stats(
             for i, r in enumerate(districts, start=1)
         ],
     }
+
+    if open_now:
+        cov = coverage_at(mode, now_seoul())
+        result["open_now"] = {
+            "at": cov.slot_start,  # 이 30분 구간의 시작 시각 기준으로 계산했다
+            "is_holiday": cov.is_holiday,
+            "open_aed_count": cov.open_aed_count,
+            "walk_pct": cov.walk_pct,
+        }
+
+    return result
