@@ -260,8 +260,8 @@ seoul-aed-walk-access/
 ## 팀
 | GitHub | 역할 |
 | --- | --- |
-| [@daechi0910](https://github.com/daechi0910) | 데이터·분석 (Valhalla 재현, 분석 파이프라인, 운영시간·공휴일 분석) |
-| [@leejihwan](https://github.com/leejihwan) | 서비스·배포 (DB, FastAPI, 화면, Docker Compose, 배포) |
+| [@daechi0910](https://github.com/daechi0910) | 데이터 수집·분석: AED 수집 파이프라인, 자치구 경계, 운영시간·공휴일 판정, 시각별 접근성 분석, 분석 그래프, QGIS 수동 검증, Docker Compose·Nginx 초기 구성 |
+| [@easyh38](https://github.com/easyh38) | 파이프라인 정비·서비스: 재실행 가능한 파이프라인(run_all), 왕복 지표, AED 위치 보정, DB 스키마·마이그레이션, FastAPI, 웹 화면, 배포 보안, 문서 |
 
 설계 문서(요구사항 PRD + 단계별 개발 가이드)는 [guideline.md](guideline.md),
 협업 규칙(Issue → 브랜치 → PR → 리뷰 → 병합)은 [docs/WORKFLOW.md](docs/WORKFLOW.md)를 따릅니다.
