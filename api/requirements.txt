@@ -5,3 +5,5 @@ uvicorn==0.54.0
 SQLAlchemy==2.1.9
 psycopg2-binary==2.9.13
 python-dotenv==1.2.4
+requests==2.34.2
+PyYAML==6.0.4
