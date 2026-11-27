@@ -58,6 +58,11 @@ def fake(monkeypatch):
             raise state["route_error"]
         return state["route"]
 
+    # 지금 시각 운영 여부: 1번 운영 중, 2번 닫힘, 3번 정보 없음(운영 중으로 간주)
+    monkeypatch.setattr(
+        nearest_router, "statuses_at",
+        lambda when: {1: "available", 2: "unavailable", 3: "unknown"},
+    )
     monkeypatch.setattr(nearest_router, "query", _query)
     monkeypatch.setattr(nearest_router, "walk_matrix", _matrix)
     monkeypatch.setattr(nearest_router, "walk_route", _route)
@@ -83,6 +88,35 @@ def test_picks_fastest_walk_not_straight_first(fake):
     route = body["nearest"]["route"]
     assert route["geometry"]["type"] == "LineString"
     assert route["geometry"]["coordinates"] == ROUTE
+
+
+def test_every_aed_has_open_status(fake):
+    body = client.get("/api/nearest", params=CITY_HALL).json()
+    assert body["nearest"]["open_status"] == "unavailable"  # 2번
+    assert [a["open_status"] for a in body["alternatives"]] == ["unknown", "available"]
+    assert body["straight_first"]["open_status"] == "available"
+
+
+def test_open_now_passes_only_open_ids(fake):
+    _, calls = fake
+    client.get("/api/nearest", params={**CITY_HALL, "open_now": "true"})
+    candidate_call = calls["sql"][-1]
+    assert candidate_call["open_only"] is True
+    assert sorted(candidate_call["ids"]) == [1, 3]
+
+
+def test_open_now_off_does_not_filter(fake):
+    _, calls = fake
+    client.get("/api/nearest", params=CITY_HALL)
+    assert calls["sql"][-1]["open_only"] is False
+
+
+def test_open_now_no_open_candidates_is_404(fake):
+    state, _ = fake
+    state["candidates"] = []
+    res = client.get("/api/nearest", params={**CITY_HALL, "open_now": "true"})
+    assert res.status_code == 404
+    assert "지금 운영 중인 AED가 없습니다" in res.json()["detail"]
 
 
 def test_same_as_straight_first(fake):

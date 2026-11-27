@@ -7,12 +7,16 @@
 4. 1등 AED까지만 /route를 호출해 경로선(GeoJSON LineString)을 만든다
 5. 1등 + 후보 2개 + straight_first_differs(직선 1등과 도보 1등이 다른지)
 
+모든 AED에 지금 시각의 open_status(available / unknown / unavailable)를 붙인다.
+open_now=true면 2단계 후보를 운영 중(available, unknown) AED로만 고른다.
+
 클릭 좌표는 계산에만 쓰고 DB나 로그에 저장하지 않는다 (PRD 8-6).
 """
 
 from fastapi import APIRouter, HTTPException, Query
 
 from api.db import query
+from api.open_now import OPEN_STATUSES, now_seoul, statuses_at
 from api.valhalla import NoRouteError, ValhallaUnavailable, walk_matrix, walk_route
 
 router = APIRouter(prefix="/api", tags=["nearest"])
@@ -43,12 +47,13 @@ CANDIDATES_SQL = """
            ST_Distance(ST_Transform(a.geom, 5179), p.g) AS straight_m
     FROM aed a, p
     WHERE ST_DWithin(ST_Transform(a.geom, 5179), p.g, :radius)
+      AND (NOT :open_only OR a.id = ANY(CAST(:ids AS int[])))
     ORDER BY ST_Transform(a.geom, 5179) <-> p.g
     LIMIT :limit
 """
 
 
-def _aed(row: dict, walk: dict | None) -> dict:
+def _aed(row: dict, walk: dict | None, statuses: dict[int, str]) -> dict:
     """응답용 AED 정보. walk가 None이면 걸어서 갈 수 없는 후보다."""
     return {
         "id": row["id"],
@@ -60,6 +65,7 @@ def _aed(row: dict, walk: dict | None) -> dict:
         "straight_distance_m": round(float(row["straight_m"]), 1),
         "walk_time_s": None if walk is None else round(walk["time_s"]),
         "walk_distance_m": None if walk is None else round(walk["distance_m"], 1),
+        "open_status": statuses.get(row["id"], "unknown"),
     }
 
 
@@ -67,6 +73,7 @@ def _aed(row: dict, walk: dict | None) -> dict:
 def nearest(
     lat: float = Query(..., ge=-90, le=90, description="클릭한 지점 위도"),
     lon: float = Query(..., ge=-180, le=180, description="클릭한 지점 경도"),
+    open_now: bool = Query(False, description="true면 지금(서울 시각) 운영 중인 AED만 후보로"),
 ):
     """클릭한 지점에서 걸어서 가장 빨리 닿는 AED, 경로, 다음 후보 2개를 돌려준다."""
 
@@ -78,13 +85,17 @@ def nearest(
         )
 
     # 2. 직선 1km 안 후보 (직선거리 순)
+    statuses = statuses_at(now_seoul())
+    ids = [i for i, st in statuses.items() if st in OPEN_STATUSES] if open_now else []
     candidates = query(
-        CANDIDATES_SQL, lat=lat, lon=lon, radius=SEARCH_RADIUS_M, limit=CANDIDATE_LIMIT
+        CANDIDATES_SQL, lat=lat, lon=lon, radius=SEARCH_RADIUS_M, limit=CANDIDATE_LIMIT,
+        open_only=open_now, ids=ids,
     )
     if not candidates:
+        which = "지금 운영 중인" if open_now else "등록된"
         raise HTTPException(
             status_code=404,
-            detail=f"반경 {SEARCH_RADIUS_M / 1000:g}km 안에 등록된 AED가 없습니다.",
+            detail=f"반경 {SEARCH_RADIUS_M / 1000:g}km 안에 {which} AED가 없습니다.",
         )
 
     # 3. 실제 도보 시간
@@ -116,15 +127,15 @@ def nearest(
     straight_first = candidates[0]
     return {
         "nearest": {
-            **_aed(first_row, first_walk),
+            **_aed(first_row, first_walk, statuses),
             "route": {
                 "type": "Feature",
                 "geometry": {"type": "LineString", "coordinates": coords},
                 "properties": {"aed_id": first_row["id"]},
             },
         },
-        "alternatives": [_aed(c, w) for c, w in reachable[1 : 1 + ALTERNATIVE_COUNT]],
+        "alternatives": [_aed(c, w, statuses) for c, w in reachable[1 : 1 + ALTERNATIVE_COUNT]],
         "straight_first_differs": straight_first["id"] != first_row["id"],
         # 화면의 "직선거리 1위는 실제로는 도보 N분" 안내용. 걸어서 못 가면 walk_*가 null
-        "straight_first": _aed(straight_first, walks[0]),
+        "straight_first": _aed(straight_first, walks[0], statuses),
     }

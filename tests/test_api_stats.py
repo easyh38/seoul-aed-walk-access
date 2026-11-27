@@ -111,3 +111,34 @@ def test_invalid_mode_is_422(fake_query):
 
     assert res.status_code == 422
     assert calls == []
+
+
+# ---- open_now ----
+
+def test_open_now_adds_current_walk_pct(fake_query, monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    from api.open_now import Coverage
+
+    start = datetime(2026, 11, 25, 22, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    monkeypatch.setattr(
+        stats_router, "coverage_at",
+        lambda mode, when: Coverage({}, 48.5, 6512, start, False, cache_hit=True),
+    )
+    body = client.get("/api/stats", params={"open_now": "true"}).json()
+
+    assert body["open_now"] == {
+        "at": "2026-11-25T22:00:00+09:00",
+        "is_holiday": False,
+        "open_aed_count": 6512,
+        "walk_pct": 48.5,
+    }
+    assert body["seoul"] is not None  # 전체 AED 기준 값은 그대로
+
+
+def test_open_now_off_has_no_block(fake_query, monkeypatch):
+    def _fail(*a, **k):
+        raise AssertionError("open_now=false면 계산하지 않는다")
+
+    monkeypatch.setattr(stats_router, "coverage_at", _fail)
+    assert "open_now" not in client.get("/api/stats").json()

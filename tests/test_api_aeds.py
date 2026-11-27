@@ -113,3 +113,36 @@ def test_invalid_input_is_422(fake_query, params):
     res = client.get("/api/aeds", params=params)
 
     assert res.status_code == 422
+
+
+# ---- open_now ----
+
+@pytest.fixture
+def fake_open(monkeypatch, fake_query):
+    """지금 시각 운영 여부를 고정한다: 1번 운영 중, 2번 닫힘, 3번 정보 없음."""
+    from api.open_now import Context
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime(2026, 11, 25, 14, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    monkeypatch.setattr(aeds_router, "now_seoul", lambda: now)
+    monkeypatch.setattr(aeds_router, "statuses_at", lambda when: {1: "available", 2: "unavailable", 3: "unknown"})
+    monkeypatch.setattr(aeds_router, "context_at", lambda when: Context(when, False, False, None))
+    return fake_query
+
+
+def test_open_now_passes_only_open_aeds(fake_open):
+    calls, _ = fake_open
+    res = client.get("/api/aeds", params={**CITY_HALL, "open_now": "true"})
+
+    assert res.status_code == 200
+    params = calls[0]
+    assert dict(zip(params["ids"], params["statuses"])) == {1: "available", 3: "unknown"}
+    assert params["at"] == "2026-11-25T14:00:00+09:00"
+    assert params["is_holiday"] is False
+
+
+def test_open_now_default_is_off(fake_open):
+    calls, _ = fake_open
+    client.get("/api/aeds", params=CITY_HALL)
+    assert "ids" not in calls[0]
