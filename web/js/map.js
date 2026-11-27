@@ -243,8 +243,8 @@ export class MapView {
   // ---------------------------------------------------------- 직선거리 원 (S-03)
 
   setCircles(features, radiusM, statuses) {
-    const group = this.groups.circles;
-    group.clearLayers();
+    const layer = this.groups.circles;
+    layer.clearLayers();
     if (!features || this.map.getZoom() < CIRCLE_MIN_ZOOM) return;
     // 한 점에 겹친 AED는 원도 겹치므로 지점마다 하나만 그린다
     for (const group of groupByPoint(features)) {
@@ -263,7 +263,7 @@ export class MapView {
         weight: 1.5,
         dashArray: "4 4",
         opacity: 0.9,
-      }).addTo(group);
+      }).addTo(layer);
     }
   }
 
