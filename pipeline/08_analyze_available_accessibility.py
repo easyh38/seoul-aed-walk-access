@@ -21,7 +21,7 @@ from pathlib import Path
 
 from sqlalchemy import text
 
-from common import get_engine
+from common import get_engine, load_isochrone_failures
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,7 +32,6 @@ SEOUL_TZ = timezone(timedelta(hours=9), name="Asia/Seoul")
 EXPECTED_DISTRICTS = 25  # 서울 자치구 수 (데이터가 바뀌어도 고정)
 
 SCENARIOS = ("available", "available_or_unknown")
-FAILURE_PATH = ROOT / "results" / "isochrones" / "isochrone_failures.csv"
 
 RESULT_COLUMNS = (
     "analysis_datetime", "scenario", "scope",
@@ -515,50 +514,6 @@ def resolve_availability_files(at: str | None, csv_path: str | None) -> tuple[Pa
     return availability_csv, availability_summary
 
 
-def load_failed_ids(path: Path = FAILURE_PATH) -> set[str]:
-    """04단계와 같은 규칙으로 등시선 실패 AED 목록을 검증한다."""
-
-    if not path.exists():
-        raise FileNotFoundError(f"Isochrone 실패 목록이 없습니다: {path}")
-
-    failures = set()
-
-    with path.open(encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        required_fields = {"serialSeq", "attempts", "error"}
-
-        if not required_fields.issubset(set(reader.fieldnames or [])):
-            raise ValueError("Isochrone 실패 CSV의 필수 컬럼이 부족합니다.")
-
-        for line_number, row in enumerate(reader, start=2):
-            serial = (row.get("serialSeq") or "").strip()
-
-            if not serial:
-                raise ValueError(
-                    f"실패 CSV {line_number}행: AED 식별자가 없습니다."
-                )
-
-            if serial in failures:
-                raise ValueError(f"중복 실패 AED 식별자: {serial}")
-
-            try:
-                attempts = int(row.get("attempts") or "")
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"{serial}: 재시도 횟수가 올바르지 않습니다."
-                ) from exc
-
-            if attempts < 1:
-                raise ValueError(f"{serial}: 재시도 횟수는 1 이상이어야 합니다.")
-
-            if not (row.get("error") or "").strip():
-                raise ValueError(f"{serial}: 실패 사유가 비어 있습니다.")
-
-            failures.add(serial)
-
-    return failures
-
-
 def load_availability(
     availability_csv: Path, availability_summary: Path
 ) -> tuple[list[dict], Counter, datetime, dict]:
@@ -687,7 +642,7 @@ def main() -> None:
         load_availability(availability_csv, availability_summary)
     )
 
-    failed_ids = load_failed_ids()
+    failed_ids = set(load_isochrone_failures())
     failed_id_list = sorted(failed_ids)
 
     failed_status_counts = Counter(

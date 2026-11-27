@@ -82,7 +82,7 @@ class TestLoadFailures(unittest.TestCase):
             },
         ])
 
-        failures = isochrone_loader.load_failures(self.csv_path)
+        failures = isochrone_loader.load_isochrone_failures(self.csv_path)
 
         self.assertEqual(set(failures), {"AED-001", "AED-002"})
         self.assertEqual(failures["AED-001"]["attempts"], "3")
@@ -90,7 +90,7 @@ class TestLoadFailures(unittest.TestCase):
     def test_header_only_csv_is_valid(self):
         self.write_csv([])
 
-        failures = isochrone_loader.load_failures(self.csv_path)
+        failures = isochrone_loader.load_isochrone_failures(self.csv_path)
 
         self.assertEqual(failures, {})
 
@@ -98,7 +98,7 @@ class TestLoadFailures(unittest.TestCase):
         missing = Path(self.temp_dir.name) / "missing.csv"
 
         with self.assertRaises(FileNotFoundError):
-            isochrone_loader.load_failures(missing)
+            isochrone_loader.load_isochrone_failures(missing)
 
     def test_missing_required_column_raises_error(self):
         self.write_csv(
@@ -107,7 +107,7 @@ class TestLoadFailures(unittest.TestCase):
         )
 
         with self.assertRaises(ValueError):
-            isochrone_loader.load_failures(self.csv_path)
+            isochrone_loader.load_isochrone_failures(self.csv_path)
 
     def test_empty_serial_raises_error(self):
         self.write_csv([
@@ -119,7 +119,7 @@ class TestLoadFailures(unittest.TestCase):
         ])
 
         with self.assertRaises(ValueError):
-            isochrone_loader.load_failures(self.csv_path)
+            isochrone_loader.load_isochrone_failures(self.csv_path)
 
     def test_duplicate_serial_raises_error(self):
         row = {
@@ -130,7 +130,7 @@ class TestLoadFailures(unittest.TestCase):
         self.write_csv([row, row])
 
         with self.assertRaises(ValueError):
-            isochrone_loader.load_failures(self.csv_path)
+            isochrone_loader.load_isochrone_failures(self.csv_path)
 
     def test_non_integer_attempts_raises_error(self):
         self.write_csv([
@@ -142,7 +142,7 @@ class TestLoadFailures(unittest.TestCase):
         ])
 
         with self.assertRaises(ValueError):
-            isochrone_loader.load_failures(self.csv_path)
+            isochrone_loader.load_isochrone_failures(self.csv_path)
 
     def test_zero_attempts_raises_error(self):
         self.write_csv([
@@ -154,7 +154,7 @@ class TestLoadFailures(unittest.TestCase):
         ])
 
         with self.assertRaises(ValueError):
-            isochrone_loader.load_failures(self.csv_path)
+            isochrone_loader.load_isochrone_failures(self.csv_path)
 
     def test_empty_error_raises_error(self):
         self.write_csv([
@@ -166,7 +166,7 @@ class TestLoadFailures(unittest.TestCase):
         ])
 
         with self.assertRaises(ValueError):
-            isochrone_loader.load_failures(self.csv_path)
+            isochrone_loader.load_isochrone_failures(self.csv_path)
 
 
 class TestValidateAedStatus(unittest.TestCase):

@@ -115,20 +115,50 @@ def load_metrics(path: Path) -> dict:
     return metrics
 
 
+# (일반, 굵게) 한글 글꼴 후보. 앞에서부터 처음 찾은 것을 쓴다.
+# 1순위 NanumGothic(Ubuntu fonts-nanum)은 커밋된 그래프를 만든 글꼴이다.
+KOREAN_FONT_CANDIDATES = (
+    (
+        Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"),
+        Path("/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"),
+    ),
+    (  # WSL에서 Windows 맑은 고딕
+        Path("/mnt/c/Windows/Fonts/malgun.ttf"),
+        Path("/mnt/c/Windows/Fonts/malgunbd.ttf"),
+    ),
+    (  # Windows
+        Path("C:/Windows/Fonts/malgun.ttf"),
+        Path("C:/Windows/Fonts/malgunbd.ttf"),
+    ),
+    (  # macOS
+        Path("/System/Library/Fonts/Supplemental/AppleGothic.ttf"),
+        Path("/System/Library/Fonts/Supplemental/AppleGothic.ttf"),
+    ),
+)
+
+
+def find_korean_font() -> tuple[Path, Path]:
+    """사용 가능한 한글 글꼴 (일반, 굵게) 파일 경로를 찾는다."""
+
+    for regular, bold in KOREAN_FONT_CANDIDATES:
+        if regular.is_file() and bold.is_file():
+            return regular, bold
+
+    tried = "\n".join(f"  - {regular}" for regular, _ in KOREAN_FONT_CANDIDATES)
+    raise FileNotFoundError(
+        "한글 글꼴 파일을 찾지 못했습니다. 찾아본 경로:\n"
+        f"{tried}\n"
+        "Ubuntu에서는 `sudo apt install fonts-nanum`으로 설치하세요."
+    )
+
+
 def configure_korean_font() -> None:
-    """NanumGothic 글꼴 파일을 Matplotlib에 직접 등록한다."""
+    """찾은 한글 글꼴 파일을 Matplotlib에 직접 등록한다."""
 
-    font_path = Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf")
-    bold_font_path = Path("/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf")
+    font_path, bold_font_path = find_korean_font()
 
-    for required_font in (font_path, bold_font_path):
-        if not required_font.is_file():
-            raise FileNotFoundError(
-                f"한글 글꼴 파일이 없습니다: {required_font}\n"
-                "Ubuntu에서 fonts-nanum 패키지를 설치하세요."
-            )
-
-        font_manager.fontManager.addfont(str(required_font))
+    for font_file in {font_path, bold_font_path}:
+        font_manager.fontManager.addfont(str(font_file))
 
     font_name = font_manager.FontProperties(
         fname=str(font_path)
@@ -290,7 +320,7 @@ def save_straight_vs_walk_chart(metrics: dict, output_dir: Path) -> Path:
 
 
 def save_oneway_roundtrip_chart(metrics: dict, output_dir: Path) -> Path:
-    """편도 4분과 왕복 2분 기준 실보행 접근률 비교."""
+    """편도 4분과 왕복 기준(편도 2분) 실보행 접근률 비교."""
 
     districts = [
         value
@@ -326,7 +356,7 @@ def save_oneway_roundtrip_chart(metrics: dict, output_dir: Path) -> Path:
         roundtrip_values,
         height=bar_height,
         color=COLORS["roundtrip"],
-        label="왕복 2분",
+        label="왕복 기준 (편도 2분)",
     )
 
     ax.set_yticks(positions, [row["scope"] for row in rows])
@@ -334,7 +364,7 @@ def save_oneway_roundtrip_chart(metrics: dict, output_dir: Path) -> Path:
     ax.set_xlim(0, 110)
     ax.set_xlabel("실보행 도달 가능 비율 (%)")
     ax.set_title(
-        "편도 4분과 왕복 2분 접근성 비교",
+        "편도 4분과 왕복 기준(편도 2분) 접근성 비교",
         loc="left",
         fontsize=17,
         fontweight=600,

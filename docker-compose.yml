@@ -1,3 +1,8 @@
+# 개발 환경. aed-db-data 볼륨은 기존 DB를 그대로 재사용한다 (external).
+#   처음이면: docker volume create aed-db-data
+#   단독 실행하던 aed-db / valhalla 컨테이너가 있으면 먼저 멈춘다
+#   (같은 포트를 쓰고, 같은 DB 볼륨을 두 컨테이너가 동시에 열면 안 된다):
+#   docker stop aed-db valhalla
 name: seoul-aed-walk-access
 
 services:
@@ -12,6 +17,8 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - aed-db-data:/var/lib/postgresql/data
+      # 볼륨이 비어 있을 때(처음 생성 시)만 실행된다. 기존 데이터에는 영향 없음
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -28,7 +35,8 @@ services:
     ports:
       - "127.0.0.1:8002:8002"
     volumes:
-      - ./valhalla/valhalla_data:/custom_files
+      # README·.gitignore와 같은 위치 (pbf와 빌드된 타일이 여기에 있다)
+      - ./valhalla/custom_files:/custom_files
     environment:
       server_threads: "1"
       use_tiles_ignore_pbf: "True"
