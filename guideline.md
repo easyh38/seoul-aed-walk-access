@@ -750,7 +750,7 @@ FastAPI가 `/docs`에 API 문서를 자동 생성한다. `/api/aeds`와 `/api/ne
 | 6 | 저장소 라이선스 | 팀 저장소의 LICENSE 결정 (예: MIT) | MIT (`LICENSE`) |
 | 7 | 글꼴 제공 방식 | CDN 사용 또는 `fonts/` 폴더에 파일 포함 (재현성 측면에서는 포함 권장) | 현재 CDN. 파일 포함은 미정 |
 | 8 | 검증 지표 섹션 | 데이터 출처와 검증 지표를 별도 섹션(9번)으로 모을지 결정 | README "분석 결과·데이터 출처"와 `docs/manual_validation.md`에 정리 |
-| 9 | 배경 지도 | OSM 타일은 실서비스 트래픽용이 아님 | VWorld 적용(키가 있으면), 키 발급 대기 중 |
+| 9 | 배경 지도 | OSM 타일은 실서비스 트래픽용이 아님 | VWorld 적용. 키는 `.env`의 `VWORLD_KEY`로 주고 Nginx가 화면에 끼워 넣음(저장소에 커밋하지 않음) |
 
 ---
 
@@ -1473,7 +1473,7 @@ class ReportIn(BaseModel):
 - **개발 중 테스트**: 화면 파일을 FastAPI가 같이 제공하게 해 두면(`app.mount("/", StaticFiles(directory="web", html=True))`, API 라우터 등록 뒤에) 주소가 하나라 편하다. 6단계에서는 Nginx가 이 역할을 대신한다.
 - **수정할 때 확인할 것**: 출처 표기(© OpenStreetMap contributors, AED 데이터 기준일), 상단 119 안내, 이모지 없음, HTTPS가 아닐 때 내 위치 버튼의 안내 문구.
 - **겹친 AED**: AED 좌표는 건물 대표점이라 같은 건물의 AED가 한 점에 겹친다. 같은 좌표의 AED는 대수를 적은 마커 하나로 묶고, 누르면 설치 장소(층·동) 목록을 보여 준다. `location_flags`가 있는 AED는 팝업에 "실제 설치 위치와 다를 수 있음" 안내를 넣는다.
-- **배경 지도**: `index.html`의 `<meta name="vworld-key">`에 VWorld 키가 있으면 VWorld 타일, 비어 있으면 OSM 타일을 쓴다. 경로·도달 구역은 지도와 관계없이 OSM 도로망(Valhalla)으로 계산하므로 OSM 출처 표기는 항상 둔다.
+- **배경 지도**: `index.html`의 `<meta name="vworld-key">`에 VWorld 키가 있으면 VWorld 타일, 비어 있으면 OSM 타일을 쓴다. 저장소의 meta 값은 항상 비워 두고, 키는 `.env`의 `VWORLD_KEY`에 넣어 Nginx가 응답할 때 채운다(6-3). 경로·도달 구역은 지도와 관계없이 OSM 도로망(Valhalla)으로 계산하므로 OSM 출처 표기는 항상 둔다.
 - **완료 기준**: 지도 클릭 → 가장 가까운 AED와 경로 표시, 레이어 켜기/끄기, 통계 표, 실시간 반영 토글, 제보 제출이 모두 동작.
 
 ## 6단계. Docker Compose 통합 (둘 다)
@@ -1489,10 +1489,11 @@ seoul-aed-walk-access/
 ├── .env                     # 실제 비밀번호·API 키 (GitHub에 올리지 않음)
 ├── .env.example             # 같은 항목, 값만 비운 예시 (올림)
 ├── api/Dockerfile
-└── nginx/default.conf       # web/ 안에 두면 화면 파일처럼 외부에 노출되므로 따로 둔다
+├── nginx/default.conf       # web/ 안에 두면 화면 파일처럼 외부에 노출되므로 따로 둔다
+└── nginx/templates/vworld.conf.template  # VWORLD_KEY를 index.html에 끼워 넣는 설정
 ```
 
-`.env.example`의 항목: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DATABASE_URL`, `AED_API_KEY`, `VALHALLA_BASE_URL`.
+`.env.example`의 항목: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `DATABASE_URL`, `AED_API_KEY`, `VALHALLA_BASE_URL`, `VWORLD_KEY`.
 
 ### 6-2. `docker-compose.yml`
 
@@ -1518,6 +1519,7 @@ seoul-aed-walk-access/
   - 접속 기록은 쿼리(`?lat=..&lon=..`)와 IP 없이 남기는 `log_format privacy`, 오류 기록은 `crit` 수준만 (기본 수준은 502/504 때 IP와 클릭 좌표를 남긴다)
   - IP별 요청 수 제한: `/api/nearest` 초당 5회(순간 10회), `/api/reports` 분당 6회(순간 3회), 넘으면 429. 본문은 16KB까지
   - 보안 헤더(`X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`), `server_tokens off`
+- `nginx/templates/vworld.conf.template`: Nginx 공식 이미지는 시작할 때 `/etc/nginx/templates/*.template`의 `${환경변수}`를 채워 `conf.d/`에 넣는다. 이 기능으로 `VWORLD_KEY`를 받아 `sub_filter`로 HTML 응답의 빈 `vworld-key` meta 값을 바꾼다. VWorld 키는 브라우저에 보이는 키지만, 공개 저장소의 git 이력에 남으면 지울 수 없으므로 코드에 넣지 않는다. 키를 바꾸면 `docker compose up -d nginx`로 다시 만든다.
   - gzip (도달 구역 GeoJSON은 1MB 이상), 화면 코드는 `no-cache`, `vendor/`는 하루 캐시
 - FastAPI의 `StaticFiles`(5단계 개발용)는 `web/`이 없는 API 이미지에서는 자동으로 건너뛴다. Compose에서는 Nginx가 화면을 준다.
 

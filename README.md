@@ -162,8 +162,11 @@ pytest
 ```
 
 ### 배경지도 (선택)
-`web/index.html`의 `<meta name="vworld-key" content="">`에 [VWorld](https://www.vworld.kr) 인증키
-(서비스 도메인 등록)를 넣으면 국토교통부 배경지도를 씁니다. 비워 두면 OSM 타일을 씁니다.
+`.env`의 `VWORLD_KEY`에 [VWorld](https://www.vworld.kr) 인증키(서비스 URL 등록 필요)를 넣으면
+국토교통부 배경지도를 씁니다. 비워 두면 OSM 타일을 씁니다.
+키는 Docker의 Nginx가 시작할 때 `index.html`에 끼워 넣습니다(`nginx/templates/vworld.conf.template`).
+그래서 저장소에는 남지 않고, Nginx를 거치지 않는 uvicorn 단독 실행(:8000)에서는 OSM 지도로 보입니다.
+키를 바꾼 뒤에는 `docker compose up -d nginx`로 Nginx를 다시 만듭니다.
 
 ## 서버 배포
 무거운 계산(지도 가공, 등시선)은 노트북에서 끝내고, 서버에는 **가공된 Valhalla 폴더와 DB 덤프만** 옮깁니다.

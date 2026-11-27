@@ -71,10 +71,14 @@ services:
   nginx:
     image: nginx:1.31.10-alpine
     restart: unless-stopped
+    environment:
+      # VWorld 배경지도 키 (.env). 비우면 OSM 지도. nginx/templates/vworld.conf.template 참고
+      VWORLD_KEY: ${VWORLD_KEY:-}
     ports:
       - "127.0.0.1:8080:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/templates:/etc/nginx/templates:ro
       - ./web:/usr/share/nginx/html:ro
     depends_on:
       api:
