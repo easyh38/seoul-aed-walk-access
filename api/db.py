@@ -55,3 +55,14 @@ def query(sql, **params):
     """
     with engine.connect() as conn:
         return [dict(row._mapping) for row in conn.execute(text(sql), params)]
+
+
+def execute(sql, **params):
+    """INSERT/UPDATE를 트랜잭션 하나로 실행하고 커밋한다.
+
+    RETURNING이 있으면 그 결과를 dict 목록으로, 없으면 빈 목록을 돌려준다.
+    오류가 나면 롤백된다.
+    """
+    with engine.begin() as conn:
+        result = conn.execute(text(sql), params)
+        return [dict(row._mapping) for row in result] if result.returns_rows else []
