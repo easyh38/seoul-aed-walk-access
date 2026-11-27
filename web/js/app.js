@@ -9,9 +9,9 @@ import { AED_MIN_ZOOM, CIRCLE_MIN_ZOOM, MapView } from "./map.js";
 
 const MODES = {
   oneway: { minutes: 4, radius: 340, label: "편도 4분",
-    desc: "AED까지 걸어서 4분 안에 닿는지로 판정합니다." },
+    desc: "AED까지 걸어서 4분 안에 닿는 곳을 셉니다." },
   roundtrip: { minutes: 2, radius: 170, label: "왕복 기준 (편도 2분)",
-    desc: "AED를 가지고 돌아오는 시간까지 생각해, 편도 2분 안에 닿는지로 판정합니다." },
+    desc: "AED를 가지고 돌아와야 하니, 편도 2분 안에 닿는 곳만 셉니다." },
 };
 
 const state = {
@@ -140,6 +140,7 @@ function renderModeTexts() {
   $("#mode-desc").textContent = m.desc;
   $("[data-minutes-text]").textContent = `걸어서 ${m.minutes}분 안에 AED에 닿는 곳`;
   $("[data-minutes-text-dead]").textContent = `${m.minutes}분 안에 어떤 AED에도 닿지 못하는 곳`;
+  $("[data-tip-text]").textContent = `직선거리 원과 실보행 도달 구역을 함께 켜 보세요. 원 안인데도 걸어서는 ${m.minutes}분 안에 닿지 못하는 곳이 보입니다.`;
   $("[data-radius-text]").textContent = `AED마다 반경 ${Math.round(radiusFor(state.mode))}m. 동네 수준으로 확대하면\u00A0보입니다`;
 }
 
@@ -317,7 +318,7 @@ function locationNoteHtml(p, className) {
   }
   if (p.location_source === "osm_building") {
     return `<div class="${className}">${icon("info", { size: 16 })}
-      <span>설치 장소의 동 이름으로 지도 위치를 보정했습니다.</span></div>`;
+      <span>원래 좌표가 부정확해, 설치 장소가 있는 동을 기준으로 위치를 옮겨 표시했습니다.</span></div>`;
   }
   return "";
 }
@@ -492,11 +493,11 @@ function resultNotes(res) {
   if (loc) notes.push(loc);
   if (!state.live && n.open_status === "unavailable") {
     notes.push(`<div class="result-note result-note--info">${icon("clock", { size: 16 })}
-      <span>지금 운영 종료입니다. 실시간 반영을 켜면 운영 중인 AED만 찾습니다.</span></div>`);
+      <span>이 AED는 지금 운영시간이 아닙니다. 실시간 반영을 켜면 운영 중인 AED만 찾습니다.</span></div>`);
   }
   if (!res.aedId && res.straight_first_differs && sf) {
     const walkText = sf.walk_time_s == null
-      ? "걸어서는 갈 수 없습니다."
+      ? "걸어서 가는 경로가 없습니다."
       : `실제로 걸으면 <b class="nowrap">${duration(sf.walk_time_s)}</b> 걸립니다.`;
     notes.push(`<div class="result-note result-note--warn">${icon("walk", { size: 16 })}
       <span>직선거리로 가장 가까운 AED는 <b>${esc(sf.place)}</b> <span class="nowrap">(${meters(sf.straight_distance_m)})입니다.</span>
@@ -612,7 +613,7 @@ form.addEventListener("submit", async (e) => {
   try {
     await api.report({ aed_id: reportTarget.properties.id, type, description: description || null });
     dialog.close();
-    showBanner("제보가 접수되었습니다. 확인 후 반영하겠습니다.", "ok");
+    showBanner("제보를 받았습니다. 확인한 뒤 반영하겠습니다.", "ok");
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) reportError(err.message);
     else if (err instanceof ApiError && err.status === 422) reportError("입력값을 확인해 주세요. 설명은 500자 이하입니다.");
@@ -676,8 +677,8 @@ async function loadStats() {
     if (live) {
       $("#stats-live").innerHTML = `
         <div class="card" aria-busy="true">
-          <p class="eyebrow">평상시 vs 지금</p>
-          <p class="small muted">지금 운영 중인 AED 기준 커버리지를 계산하는 중입니다. 처음 한&nbsp;번은 몇&nbsp;초 걸릴 수 있습니다.</p>
+          <p class="eyebrow">평상시와 지금</p>
+          <p class="small muted">지금 운영 중인 AED로 도달 구역을 다시 계산하는 중입니다. 처음 한&nbsp;번은 몇&nbsp;초 걸릴 수 있습니다.</p>
         </div>`;
       const now = await api.stats(mode, { openNow: true });
       if (seq !== statsSeq) return;
@@ -698,7 +699,7 @@ function renderStats(data) {
   $("#stats-summary").innerHTML = s ? `
     <div class="card surface-deep">
       <p class="eyebrow">서울 전체 · ${esc(m.label)}</p>
-      <p class="lead">걸어서 ${m.minutes}분 안에 AED에 닿는 곳은 <span class="accent num">${pct(s.walk_pct)}</span></p>
+      <p class="lead">서울에서 걸어서 ${m.minutes}분 안에 AED에 닿는 곳은 <span class="accent num">${pct(s.walk_pct)}</span></p>
       <div class="stat-pair">
         <div><p class="small muted">직선거리 기준</p><p class="big-num">${pct(s.straight_pct)}</p></div>
         <div><p class="small muted">실보행 기준</p><p class="big-num">${pct(s.walk_pct)}</p></div>
@@ -746,7 +747,7 @@ function renderLiveStats(base, now) {
   $("#stats-live").innerHTML = `
     <div class="card">
       <div class="card__head">
-        <p class="eyebrow">평상시 vs 지금</p>
+        <p class="eyebrow">평상시와 지금</p>
         <span class="small muted num">기준: ${esc(seoulTime(now.at))}${now.is_holiday ? " · 공휴일" : ""}</span>
       </div>
       <div class="stat-pair">
