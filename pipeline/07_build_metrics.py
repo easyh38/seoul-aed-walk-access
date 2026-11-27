@@ -39,6 +39,27 @@ PRECHECK_SQL = text("""
         (SELECT COUNT(*) FROM public.district) AS district_count,
         (SELECT COUNT(*) FROM public.aed) AS aed_count,
         (SELECT COUNT(*) FROM public.isochrone) AS isochrone_count,
+        (SELECT COUNT(DISTINCT aed_id)
+         FROM public.isochrone) AS isochrone_aed_count,
+
+        (SELECT COUNT(*)
+         FROM public.aed a
+         WHERE EXISTS (
+             SELECT 1 FROM public.isochrone i
+             WHERE i.aed_id = a.id AND i.minutes = 2
+         )
+         AND EXISTS (
+             SELECT 1 FROM public.isochrone i
+             WHERE i.aed_id = a.id AND i.minutes = 4
+         )) AS successful_aed_count,
+
+        (SELECT COUNT(*)
+         FROM public.aed a
+         WHERE NOT EXISTS (
+             SELECT 1 FROM public.isochrone i
+             WHERE i.aed_id = a.id
+         )) AS failed_aed_count,
+
         (SELECT COUNT(*) FROM public.grid_point) AS grid_count,
 
         (SELECT COUNT(*) FROM public.aed
@@ -75,9 +96,12 @@ INVALID_PAIR_SQL = text("""
         LEFT JOIN public.isochrone i ON i.aed_id = a.id
         GROUP BY a.id
         HAVING
-            COUNT(i.minutes) <> 2
-            OR COUNT(i.minutes) FILTER (WHERE i.minutes = 2) <> 1
-            OR COUNT(i.minutes) FILTER (WHERE i.minutes = 4) <> 1
+            COUNT(i.minutes) > 0
+            AND (
+                COUNT(i.minutes) <> 2
+                OR COUNT(i.minutes) FILTER (WHERE i.minutes = 2) <> 1
+                OR COUNT(i.minutes) FILTER (WHERE i.minutes = 4) <> 1
+            )
     ) AS invalid
 """)
 
@@ -210,10 +234,22 @@ INSERT_METRICS_TEMPLATE = """
     ),
     district_aed AS (
         SELECT
-            gu,
+            a.gu,
             COUNT(*) AS aed_count
-        FROM public.aed
-        GROUP BY gu
+        FROM public.aed a
+        WHERE EXISTS (
+            SELECT 1
+            FROM public.isochrone i
+            WHERE i.aed_id = a.id
+              AND i.minutes = 2
+        )
+        AND EXISTS (
+            SELECT 1
+            FROM public.isochrone i
+            WHERE i.aed_id = a.id
+              AND i.minutes = 4
+        )
+        GROUP BY a.gu
     ),
     district_metrics AS (
         SELECT
@@ -289,7 +325,22 @@ INSERT_METRICS_TEMPLATE = """
                 FROM tmp_city_overlay
             ) AS deadzone_km2,
 
-            (SELECT COUNT(*)::integer FROM public.aed) AS aed_count
+            (
+                SELECT COUNT(*)::integer
+                FROM public.aed a
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM public.isochrone i
+                    WHERE i.aed_id = a.id
+                      AND i.minutes = 2
+                )
+                AND EXISTS (
+                    SELECT 1
+                    FROM public.isochrone i
+                    WHERE i.aed_id = a.id
+                      AND i.minutes = 4
+                )
+            ) AS aed_count
 
         FROM public.grid_point
     )
@@ -409,11 +460,32 @@ def check_source_data(precheck, invalid_pairs) -> None:
         if precheck[key] == 0:
             raise RuntimeError(f"{key}가 0건입니다. 이전 단계를 먼저 실행하세요.")
 
-    # AED마다 2분·4분 등시선이 하나씩 있어야 한다
-    if precheck["isochrone_count"] != precheck["aed_count"] * len(MODES):
+    # 등시선 성공 AED와 완전 실패 AED가 전체 AED를 구성해야 한다.
+    successful_aed_count = precheck["successful_aed_count"]
+    failed_aed_count = precheck["failed_aed_count"]
+
+    if successful_aed_count == 0:
+        raise RuntimeError("2분·4분 등시선 생성에 성공한 AED가 없습니다.")
+
+    if successful_aed_count + failed_aed_count != precheck["aed_count"]:
+        raise RuntimeError(
+            "AED가 성공·실패 집합으로 완전히 분류되지 않았습니다: "
+            f"전체 {precheck['aed_count']}, 성공 {successful_aed_count}, "
+            f"실패 {failed_aed_count}"
+        )
+
+    if precheck["isochrone_count"] != successful_aed_count * len(MODES):
         raise RuntimeError(
             f"등시선 수 불일치: {precheck['isochrone_count']} / "
-            f"예상 {precheck['aed_count'] * len(MODES)} (AED {precheck['aed_count']} × {len(MODES)})"
+            f"예상 {successful_aed_count * len(MODES)} "
+            f"(성공 AED {successful_aed_count} × {len(MODES)})"
+        )
+
+    if precheck["isochrone_aed_count"] != successful_aed_count:
+        raise RuntimeError(
+            "등시선 고유 AED 수 불일치: "
+            f"{precheck['isochrone_aed_count']} / "
+            f"성공 AED {successful_aed_count}"
         )
 
     for key in ("invalid_aed", "invalid_grid", "invalid_districts", "invalid_isochrones"):
@@ -554,10 +626,13 @@ def main() -> None:
         print("서울 AED 통계·사각지대 분석 사전 검사")
         print("=" * 55)
         print(f"자치구: {precheck['district_count']:,}개")
-        print(f"AED: {precheck['aed_count']:,}개")
+        print(f"전체 AED: {precheck['aed_count']:,}개")
+        print(f"등시선 생성 성공 AED: {precheck['successful_aed_count']:,}개")
+        print(f"등시선 생성 실패 AED(통계 제외): {precheck['failed_aed_count']:,}개")
         print(f"Isochrone: {precheck['isochrone_count']:,}개")
+        print(f"Isochrone 고유 AED: {precheck['isochrone_aed_count']:,}개")
         print(f"100m 격자: {precheck['grid_count']:,}개")
-        print(f"잘못된 AED별 Isochrone: {invalid_pairs}건")
+        print(f"불완전한 AED별 Isochrone: {invalid_pairs}건")
         print(f"미계산 격자: {precheck['incomplete_grid']:,}개")
         print(f"이전 실행 이력: {precheck['previous_runs']:,}건")
         print(f"이전 통계: {precheck['previous_metrics']:,}건")
@@ -625,12 +700,29 @@ def main() -> None:
             ).mappings().one()
 
             # 사전 검사 이후 원본 데이터가 바뀌었는지 확인
-            for key in ("district_count", "aed_count", "isochrone_count", "grid_count"):
+            source_count_keys = (
+                "district_count",
+                "aed_count",
+                "isochrone_count",
+                "isochrone_aed_count",
+                "successful_aed_count",
+                "failed_aed_count",
+                "grid_count",
+            )
+            for key in source_count_keys:
                 if current[key] != precheck[key]:
                     raise RuntimeError(
                         f"실행 직전 원본 데이터 상태가 변경됐습니다: "
                         f"{key} {precheck[key]} → {current[key]}"
                     )
+
+            current_invalid_pairs = conn.execute(
+                INVALID_PAIR_SQL
+            ).scalar_one()
+            if current_invalid_pairs != invalid_pairs:
+                raise RuntimeError(
+                    "실행 직전 AED별 Isochrone 구성이 변경됐습니다."
+                )
             if current["incomplete_grid"] != 0:
                 raise RuntimeError("실행 직전 미계산 격자가 생겼습니다.")
 

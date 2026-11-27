@@ -8,3 +8,6 @@ psycopg2-binary==2.9.13  # PostgreSQL 드라이버 (DATABASE_URL=postgresql+psyc
 geopandas==1.2.0         # 03 자치구 경계 SHP 읽기
 pyogrio==0.13.0          # geopandas 파일 읽기 엔진
 shapely==2.2.0           # 03 도형 변환
+matplotlib==3.11.2      # 07 지표 그래프 생성
+
+holidays==0.109

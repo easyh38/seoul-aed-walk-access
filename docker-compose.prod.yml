@@ -1,0 +1,18 @@
+services:
+  db:
+    ports: !reset []
+
+  valhalla:
+    ports: !reset []
+
+  api:
+    ports: !reset []
+
+  nginx:
+    ports: !override
+      - "80:80"
+
+volumes:
+  aed-db-data:
+    external: false
+    name: aed-prod-db-data
