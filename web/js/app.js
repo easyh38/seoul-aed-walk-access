@@ -35,7 +35,7 @@ const mobileQuery = window.matchMedia("(max-width: 767.98px)");
 
 hydrateIcons();
 
-const view = new MapView($("#map"), { onMapClick, onAedClick });
+const view = new MapView($("#map"), { onMapClick, onAedClick, onAedGroupClick });
 // 브라우저 콘솔·화면 테스트에서 지도를 직접 움직여 볼 수 있게 열어 둔다 (동작에는 영향 없음)
 window.aedApp = { map: view.map };
 
@@ -274,7 +274,25 @@ $("#zoom-out").addEventListener("click", () => view.zoomBy(-1));
 let lastPopupClose = 0;
 view.map.on("popupclose", () => { lastPopupClose = performance.now(); });
 
-function popupHtml(feature, status) {
+// 좌표 출처·위치 의심 안내 (02_refine_location). 팝업과 찾기 결과 카드가 같이 쓴다
+function locationNoteHtml(p, className) {
+  const flags = p.location_flags || [];
+  if (flags.length) {
+    return `<div class="${className} ${className}--warn">${icon("warning", { size: 16 })}
+      <span>지도 위치가 실제 설치 위치와 다를 수 있습니다. 설치 장소 안내를 함께 확인하세요.</span></div>`;
+  }
+  if (p.location_source === "osm_building") {
+    return `<div class="${className}">${icon("info", { size: 16 })}
+      <span>설치 장소의 동 이름으로 지도 위치를 보정했습니다.</span></div>`;
+  }
+  return "";
+}
+
+function liveStatusOf(feature) {
+  return state.live ? state.statuses?.get(feature.properties.id) || "unavailable" : undefined;
+}
+
+function popupHtml(feature, status, { back = 0 } = {}) {
   const p = feature.properties;
   const hours = hoursRows(p.hours)
     .map(([d, t]) => `<li><b>${esc(d)}</b><span>${esc(t)}</span></li>`).join("");
@@ -284,8 +302,10 @@ function popupHtml(feature, status) {
   return `
     <div class="aed-pop">
       <button class="icon-btn aed-pop__close" type="button" data-act="close" aria-label="닫기">${icon("close")}</button>
+      ${back ? `<button class="btn btn--ghost aed-pop__back" type="button" data-act="back">같은 지점 AED ${back}대 목록</button>` : ""}
       <h3 class="title">${esc(p.place || "설치 장소 정보 없음")}</h3>
       <p class="small muted">${esc(p.address || "")}</p>
+      ${locationNoteHtml(p, "aed-pop__note")}
       <ul class="aed-pop__hours" aria-label="운영시간">${hours}</ul>
       <div class="aed-pop__status"><span class="muted">현재 상태</span><span data-status>${statusHtml}</span></div>
       <div class="aed-pop__actions">
@@ -295,13 +315,43 @@ function popupHtml(feature, status) {
     </div>`;
 }
 
-async function onAedClick(feature, marker) {
-  const known = state.live ? marker.status : undefined;
-  const popup = view.openPopup(marker, popupHtml(feature, known));
+/** 한 점에 겹친 AED 목록 (같은 건물·단지). 하나를 고르면 그 AED의 상세 팝업으로 바뀐다 */
+function onAedGroupClick(features, marker) {
+  const sorted = [...features].sort((a, b) =>
+    (a.properties.place || "").localeCompare(b.properties.place || "", "ko", { numeric: true }));
+  const addresses = new Set(sorted.map((f) => f.properties.address || ""));
+  const items = sorted.map((f, i) => {
+    const pill = state.live ? statusPill(liveStatusOf(f)) || "" : "";
+    return `<li><button type="button" data-idx="${i}">
+      <span class="aed-stack-list__place">${esc(f.properties.place || "설치 장소 정보 없음")}</span>${pill}</button></li>`;
+  }).join("");
+  const flagged = sorted.find((f) => (f.properties.location_flags || []).length);
+  const html = `
+    <div class="aed-pop">
+      <button class="icon-btn aed-pop__close" type="button" data-act="close" aria-label="닫기">${icon("close")}</button>
+      <h3 class="title">이 지점에 AED ${sorted.length}대</h3>
+      <p class="small muted">${esc(addresses.size === 1 ? sorted[0].properties.address || "" : "주소가 서로 다른 AED가 함께 있습니다")}</p>
+      ${flagged ? locationNoteHtml(flagged.properties, "aed-pop__note") : `
+      <div class="aed-pop__note">${icon("info", { size: 16 })}
+        <span>지도 좌표가 건물 단위라 한 지점에 모여 보입니다. 층·동 등 설치 장소를 확인하세요.</span></div>`}
+      <ul class="aed-stack-list" aria-label="설치 장소 목록">${items}</ul>
+    </div>`;
+  const popup = view.openPopup(marker, html);
+  const root = popup.getElement();
+  root.querySelector('[data-act="close"]').addEventListener("click", () => view.closePopup());
+  root.querySelectorAll("[data-idx]").forEach((btn) => btn.addEventListener("click", () => {
+    onAedClick(sorted[Number(btn.dataset.idx)], marker, { group: features });
+  }));
+}
+
+async function onAedClick(feature, marker, { group } = {}) {
+  const known = liveStatusOf(feature);
+  const popup = view.openPopup(marker, popupHtml(feature, known, { back: group ? group.length : 0 }));
   const root = popup.getElement();
   root.querySelector('[data-act="route"]').addEventListener("click", () => routeToAed(feature));
   root.querySelector('[data-act="report"]').addEventListener("click", () => openReport(feature));
   root.querySelector('[data-act="close"]').addEventListener("click", () => view.closePopup());
+  root.querySelector('[data-act="back"]')?.addEventListener("click", () => onAedGroupClick(group, marker));
 
   if (known !== undefined) return;
   // 실시간 반영 OFF: 이 AED 하나만 지금 운영 중인지 물어본다 (작은 범위 + open_now)
@@ -417,6 +467,7 @@ function renderFindResult(res) {
         <span><span class="muted">도보 거리</span> <b class="num">${meters(n.walk_distance_m)}</b></span>
         <span><span class="muted">직선거리</span> <b class="num">${meters(n.straight_distance_m)}</b></span>
       </div>
+      ${locationNoteHtml(n, "aed-pop__note")}
       <p class="small muted">출발: ${esc(res.originLabel)}${state.live ? " · 지금 운영 중인 AED만" : ""}</p>
     </div>`;
 

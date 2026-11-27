@@ -65,6 +65,40 @@
 .aed-pop__status { display: flex; align-items: center; gap: 8px; font-size: var(--fs-small); }
 .aed-pop__actions { display: flex; gap: 8px; padding-top: 4px; }
 .aed-pop__actions .btn { flex: 1; min-height: 40px; padding: 0 12px; font-size: var(--fs-small); }
+.aed-pop__note {
+  display: flex; gap: 6px; align-items: flex-start;
+  padding: 8px 10px; border-radius: var(--r-sm);
+  font-size: var(--fs-small); line-height: var(--lh-small);
+  background: var(--bg); color: var(--text-muted);
+}
+.aed-pop__note svg { flex: none; width: 16px; height: 16px; margin-top: 1px; }
+.aed-pop__note--warn { background: var(--st-warn-bg); color: var(--st-warn-fg); }
+.aed-pop__back { min-height: 32px; padding: 0 8px; margin-left: -8px; font-size: var(--fs-small); }
+
+/* 한 점에 겹친 AED 목록 */
+.aed-stack-list { margin: 0; padding: 0; list-style: none; max-height: 240px; overflow-y: auto; }
+.aed-stack-list li + li { margin-top: 6px; }
+.aed-stack-list button {
+  display: flex; width: 100%; align-items: center; gap: 8px;
+  min-height: var(--touch); padding: 8px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--surface); color: var(--text); font: inherit; font-size: var(--fs-small);
+  text-align: left; cursor: pointer;
+}
+.aed-stack-list button:hover { border-color: var(--text-muted); }
+.aed-stack-list button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.aed-stack-list__place { flex: 1; min-width: 0; word-break: keep-all; }
+
+/* 묶음 마커: AED 점보다 크게, 흰 테두리 + 대수 */
+.aed-stack {
+  display: grid; place-items: center;
+  border: 2px solid #FFFFFF; border-radius: 50%;
+  background: var(--aed-600); color: #FFFFFF; /* 흰 숫자 대비를 위해 점(aed-500)보다 한 단계 진하게 */
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 4px rgba(18, 18, 18, .25);
+  cursor: pointer;
+}
+.aed-stack.is-closed { background: var(--map-aed-closed); color: var(--text); }
 
 /* ------------------------------------------------------------ 지도 위 버튼 */
 

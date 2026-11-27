@@ -11,12 +11,30 @@ export const AED_MIN_ZOOM = 13; // 서울 전체 화면에서는 점이 지도�
 // 겹침 순서(아래 → 위): 타일 → 사각지대 → 도달 구역 → 직선거리 원 → 경로 → AED → 목적지 → 사용자 핀
 const PANES = { deadzone: 410, coverage: 420, circles: 430, route: 440, aeds: 450, dest: 460, pin: 470 };
 
+// 배경지도: VWorld(국토교통부) 키가 있으면 VWorld, 없으면 OSM으로 대체한다.
+// VWorld 키는 등록한 도메인에서만 동작하므로 브라우저에 노출돼도 된다 (index.html의 meta 태그).
+// 도보 경로·도달 구역은 지도와 무관하게 OSM 도로망(Valhalla)으로 계산한다.
+function baseTileLayer() {
+  const key = document.querySelector('meta[name="vworld-key"]')?.content.trim();
+  if (key) {
+    return L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${encodeURIComponent(key)}/Base/{z}/{y}/{x}.png`, {
+      minZoom: 6,
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.vworld.kr" target="_blank" rel="noopener">VWorld</a>(국토교통부)',
+    });
+  }
+  return L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  });
+}
+
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
 export class MapView {
-  constructor(el, { onMapClick, onAedClick }) {
+  constructor(el, { onMapClick, onAedClick, onAedGroupClick }) {
     this.colors = {
       aed: cssVar("--map-aed"),
       closed: cssVar("--map-aed-closed"),
@@ -39,10 +57,7 @@ export class MapView {
       preferCanvas: true,
     }).setView(SEOUL_CENTER, 11);
 
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    }).addTo(this.map);
+    baseTileLayer().addTo(this.map);
     this.map.attributionControl.setPrefix(false);
 
     this.renderers = {};
@@ -64,7 +79,8 @@ export class MapView {
     };
 
     this.onAedClick = onAedClick;
-    this.markers = new Map(); // aed id → circleMarker
+    this.onAedGroupClick = onAedGroupClick;
+    this.markers = new Map(); // aed id → circleMarker (겹친 AED는 묶음 마커)
     this.map.on("click", (e) => onMapClick(e.latlng));
     this.map.on("zoomend", () => this._restyleMarkers());
   }
@@ -115,25 +131,45 @@ export class MapView {
     };
   }
 
-  /** features: /api/aeds의 GeoJSON features. statuses: Map(id → 상태) 또는 null(실시간 반영 OFF) */
+  /** features: /api/aeds의 GeoJSON features. statuses: Map(id → 상태) 또는 null(실시간 반영 OFF)
+   *  원본 좌표가 건물(단지) 대표점이라 같은 건물의 AED는 한 점에 겹친다.
+   *  겹친 AED는 대수를 적은 묶음 마커 하나로 보여 주고, 누르면 설치 위치 목록을 연다. */
   setAeds(features, statuses) {
     this.groups.aeds.clearLayers();
     this.markers.clear();
-    for (const f of features) {
-      const [lon, lat] = f.geometry.coordinates;
-      const p = f.properties;
-      const status = statuses ? statuses.get(p.id) || "unavailable" : null;
-      const m = L.circleMarker([lat, lon], {
-        ...this._markerStyle(status),
+    const statusOf = (f) => (statuses ? statuses.get(f.properties.id) || "unavailable" : null);
+    for (const group of groupByPoint(features)) {
+      const [lon, lat] = group[0].geometry.coordinates;
+      if (group.length === 1) {
+        const f = group[0];
+        const m = L.circleMarker([lat, lon], {
+          ...this._markerStyle(statusOf(f)),
+          pane: "aeds",
+          renderer: this.renderers.aeds,
+          bubblingMouseEvents: false, // AED를 눌렀을 때 지도 클릭(찾기)이 같이 실행되지 않게
+        });
+        m.status = statusOf(f);
+        m.on("click", () => this.onAedClick(f, m));
+        m.addTo(this.groups.aeds);
+        this.markers.set(f.properties.id, m);
+        continue;
+      }
+      // 하나라도 운영 중이면 운영 중 색으로 (실시간 반영 OFF면 statuses가 없어 기본 색)
+      const allClosed = statuses && group.every((f) => statusOf(f) === "unavailable");
+      const m = L.marker([lat, lon], {
         pane: "aeds",
-        renderer: this.renderers.aeds,
-        bubblingMouseEvents: false, // AED를 눌렀을 때 지도 클릭(찾기)이 같이 실행되지 않게
+        bubblingMouseEvents: false,
+        title: `이 지점에 AED ${group.length}대`,
+        icon: L.divIcon({
+          className: `aed-stack${allClosed ? " is-closed" : ""}`,
+          html: `<span>${group.length}</span>`,
+          iconSize: [26, 26],
+          iconAnchor: [13, 13],
+        }),
       });
-      m.feature = f;
-      m.status = status;
-      m.on("click", () => this.onAedClick(f, m));
+      m.on("click", () => this.onAedGroupClick(group, m));
       m.addTo(this.groups.aeds);
-      this.markers.set(p.id, m);
+      for (const f of group) this.markers.set(f.properties.id, m);
     }
   }
 
@@ -143,7 +179,7 @@ export class MapView {
   }
 
   _restyleMarkers() {
-    for (const m of this.markers.values()) m.setStyle(this._markerStyle(m.status));
+    for (const m of this.markers.values()) if (m.setStyle) m.setStyle(this._markerStyle(m.status));
   }
 
   openPopup(marker, html) {
@@ -182,9 +218,13 @@ export class MapView {
     const group = this.groups.circles;
     group.clearLayers();
     if (!features || this.map.getZoom() < CIRCLE_MIN_ZOOM) return;
-    for (const f of features) {
-      if (statuses && (statuses.get(f.properties.id) || "unavailable") === "unavailable") continue;
-      const [lon, lat] = f.geometry.coordinates;
+    // 한 점에 겹친 AED는 원도 겹치므로 지점마다 하나만 그린다
+    for (const group of groupByPoint(features)) {
+      const open = statuses
+        ? group.filter((f) => (statuses.get(f.properties.id) || "unavailable") !== "unavailable")
+        : group;
+      if (!open.length) continue;
+      const [lon, lat] = open[0].geometry.coordinates;
       L.circle([lat, lon], {
         radius: radiusM,
         pane: "circles",
@@ -240,6 +280,17 @@ export class MapView {
     pts.push([origin.lat, origin.lng]);
     this.fitBounds(L.latLngBounds(pts), padding);
   }
+}
+
+/** 좌표가 똑같은 AED끼리 묶는다 (입력 순서 유지) */
+export function groupByPoint(features) {
+  const groups = new Map();
+  for (const f of features) {
+    const key = f.geometry.coordinates.join(",");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(f);
+  }
+  return [...groups.values()];
 }
 
 export function reducedMotion() {
