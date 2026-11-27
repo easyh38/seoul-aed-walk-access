@@ -316,9 +316,9 @@ function locationNoteHtml(p, className) {
     return `<div class="${className} ${className}--warn">${icon("warning", { size: 16 })}
       <span>지도 위치가 실제 설치 위치와 다를 수 있습니다. 설치 장소 안내를 함께 확인하세요.</span></div>`;
   }
-  if (p.location_source === "osm_building") {
+  if (p.location_source && p.location_source !== "api") {
     return `<div class="${className}">${icon("info", { size: 16 })}
-      <span>원래 좌표가 부정확해, 설치 장소가 있는 동을 기준으로 위치를 옮겨 표시했습니다.</span></div>`;
+      <span>주소 좌표는 단지 전체를 가리켜서, 설치 장소에 적힌 건물(예: 101동) 위치로 옮겨 표시했습니다.</span></div>`;
   }
   return "";
 }
