@@ -17,9 +17,12 @@ body {
   -webkit-font-smoothing: antialiased;
   word-break: keep-all; /* 한글 단어 중간에서 줄이 바뀌지 않게 */
   overflow-wrap: break-word;
+  text-wrap: pretty; /* 마지막 줄에 한 단어만 남지 않게 (지원하지 않는 브라우저는 무시) */
 }
 
 h1, h2, h3, p { margin: 0; }
+b, strong { font-weight: 600; } /* 굵기는 400/500/600만 (PRD 6-6) */
+.nowrap { white-space: nowrap; }
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 [hidden] { display: none !important; }
@@ -36,15 +39,16 @@ button { cursor: pointer; }
   flex: none;
 }
 .icon svg { width: 100%; height: 100%; }
+.icon .live-dot { margin: auto; }
 
 .num { font-variant-numeric: tabular-nums; }
 .muted { color: var(--text-muted); }
 .small { font-size: var(--fs-small); line-height: var(--lh-small); }
+/* 한글 작은 제목: 영문용 자간·대문자 변환은 한글을 띄엄띄엄 보이게 해서 쓰지 않는다 */
 .eyebrow {
   font-size: var(--fs-eyebrow);
   line-height: var(--lh-eyebrow);
-  letter-spacing: .1em;
-  text-transform: uppercase;
+  font-weight: 500;
   color: var(--text-muted);
 }
 .title {
@@ -78,7 +82,7 @@ button { cursor: pointer; }
 
 .app {
   display: grid;
-  grid-template-rows: var(--header-h) 1fr var(--footer-h);
+  grid-template-rows: var(--header-h) 1fr auto;
   height: 100%;
 }
 
@@ -122,18 +126,19 @@ button { cursor: pointer; }
   min-height: 0;
 }
 
+/* 좁은 화면에서는 면책 문구가 가려지지 않게 여러 줄로 감싼다 */
 .app-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 0 20px;
+  gap: 0 6px;
+  min-height: var(--footer-h);
+  padding: 4px 20px;
   background: var(--surface);
   border-top: 1px solid var(--border);
   font-size: var(--fs-small);
   line-height: var(--lh-small);
   color: var(--text-muted);
-  white-space: nowrap;
-  overflow-x: auto;
 }
 .app-footer a { color: inherit; }
 
@@ -414,12 +419,13 @@ button { cursor: pointer; }
 .alt-item:active { transform: scale(.98); }
 .alt-item + .alt-item { margin-top: 8px; }
 .alt-item__text { flex: 1; min-width: 0; }
+/* 층·위치가 뒤에 오는 이름이 많아 두 줄까지 보여 준다 */
 .alt-item__place {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   font-weight: 500;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .alt-item__time { font-weight: 500; font-variant-numeric: tabular-nums; }
 
@@ -436,6 +442,25 @@ button { cursor: pointer; }
 .notice--warn { background: var(--st-warn-bg); color: var(--st-warn-fg); }
 .notice--bad { background: var(--st-bad-bg); color: var(--st-bad-fg); }
 
+/* 찾기 결과 카드 안의 안내 줄 (상자를 따로 쌓지 않는다) */
+.result-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.result-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+.result-note > svg { flex: none; margin-top: 1px; color: var(--text-muted); }
+.result-note--info > svg { color: var(--st-info-fg); }
+.result-note--warn > svg { color: var(--st-warn-fg); }
+
 .steps { margin: 0; padding-left: 20px; color: var(--text-muted); }
 .steps li + li { margin-top: 4px; }
 
@@ -448,7 +473,8 @@ button { cursor: pointer; }
 
 /* ------------------------------------------------------------ 자치구 통계 표 */
 
-.table-wrap { margin: 0 calc(var(--pad-card) * -1); overflow-x: auto; }
+/* overflow-x: auto는 스크롤 상자를 만들어 머리글 고정(sticky)을 막는다. clip은 그러지 않는다 */
+.table-wrap { margin: 0 calc(var(--pad-card) * -1); overflow-x: clip; }
 .stats-table {
   width: 100%;
   border-collapse: collapse;
@@ -466,11 +492,12 @@ button { cursor: pointer; }
 .stats-table th:last-child, .stats-table td:last-child { padding-right: var(--pad-card); }
 .stats-table th {
   position: sticky;
-  top: 0;
+  top: -16px; /* 패널 안쪽 여백만큼 올려 스크롤 위쪽 끝에 붙인다 */
+  z-index: 1;
   background: var(--surface);
   color: var(--text-muted);
   font-weight: 500;
-  border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 -1px 0 var(--border); /* 고정된 동안에도 아래 선이 따라오게 (border는 따라오지 않는다) */
 }
 .stats-table .col-gu { text-align: left; }
 .stats-table tbody tr {
@@ -556,13 +583,36 @@ button { cursor: pointer; }
 }
 .icon-btn:hover { background: var(--bg); color: var(--text); }
 
+/* 지도 칩 안의 작은 버튼: 보이는 높이는 작게, 누르는 영역은 44px */
+.chip-btn {
+  position: relative;
+  margin-left: 4px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-small);
+  font-weight: 500;
+}
+.chip-btn::before { content: ""; position: absolute; inset: -12px -4px; }
+.chip-btn:hover { border-color: var(--text-muted); }
+
 /* ------------------------------------------------------------ 모바일 (768px 미만): 하단 시트 */
 
 @media (max-width: 767.98px) {
   :root { --header-h: 52px; --footer-h: 28px; }
 
   .app-header { padding: 0 12px; }
-  .app-header h1 { font-size: 15px; }
+  /* 좁은 화면에서는 제목을 자르지 않고 두 줄로 */
+  .app-header h1 {
+    font-size: 14px;
+    line-height: 18px;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
   .app-header .pill span.long { display: none; }
 
   .app-main { display: block; position: relative; }
@@ -605,7 +655,7 @@ button { cursor: pointer; }
   .tabs { margin-top: 8px; }
   .tab { min-height: var(--touch); }
 
-  .app-footer { font-size: 11px; padding: 0 12px; }
+  .app-footer { font-size: 11px; line-height: 16px; padding: 4px 12px; }
 
   /* 찾기 결과 도보 시간은 24px 이상 유지 (6-8) */
   .big-num { font-size: 28px; line-height: 32px; }

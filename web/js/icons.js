@@ -15,6 +15,7 @@ const PATHS = {
   minus: '<path d="M5 12h14"/>',
   walk: '<circle cx="13" cy="4.5" r="1.5"/><path d="m9 21 2.5-6.5L14 17v4M8 11l3-3.5 3 2.5 3 1M11.5 14.5 12.5 9"/>',
   chevron: '<path d="m6 15 6-6 6 6"/>',
+  back: '<path d="m15 6-6 6 6 6"/>',
   check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
 };
 
