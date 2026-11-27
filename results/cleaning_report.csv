@@ -1,8 +1,8 @@
 항목,건수 또는 값,설명
-source_file,aed_seoul_20261110_235347.json,사용한 원본 파일
-metadata_total_count,11589,원본 메타데이터 전체 건수
-raw_record_count,11589,원본 JSON 실제 데이터 건수
-clean_record_count,11589,정제 후 저장된 AED 건수
+source_file,aed_seoul_20261125_140246.json,사용한 원본 파일
+metadata_total_count,11745,원본 메타데이터 전체 건수
+raw_record_count,11745,원본 JSON 실제 데이터 건수
+clean_record_count,11745,정제 후 저장된 AED 건수
 excluded_record_count,0,정제 과정에서 제외된 데이터 건수
 missing_serial_seq,0,AED 일련번호 누락
 missing_address,0,주소 누락
@@ -11,28 +11,28 @@ invalid_coordinate,0,좌표 형식 또는 범위 오류
 outside_seoul_address,0,서울 외 주소
 duplicate_serial_seq,0,중복 AED 일련번호
 missing_organization,0,"기관명 누락, 데이터는 유지"
-records_with_missing_operating_hours,4578,운영시간 필드 중 하나 이상 빈값
-blank_operating_time_values,24796,운영시간 빈값 전체 개수
+records_with_missing_operating_hours,4644,운영시간 필드 중 하나 이상 빈값
+blank_operating_time_values,25152,운영시간 빈값 전체 개수
 records_requiring_time_review,3,유효하지 않은 운영시간을 하나 이상 포함한 AED
-time_values_over_2400,2179,2400 초과 원본 시간값 개수 (참고용)
+time_values_over_2400,2176,2400 초과 원본 시간값 개수 (참고용)
 unrecognized_time_formats,0,4자리 숫자 형식이 아닌 운영시간 값
-generated_at,2026-11-21T21:35:46.005177+09:00,정제 보고서 생성 시각
+generated_at,2026-11-27T22:17:05.208556+09:00,정제 보고서 생성 시각
 invalid_operating_hour_days,15,운영시간 오류가 발생한 요일 전체 개수
-missing_operating_hour_days,12398,운영시간이 누락된 요일 전체 개수
+missing_operating_hour_days,12576,운영시간이 누락된 요일 전체 개수
 invalid_mon,3,mon요일 운영시간 오류 AED 수
-missing_mon,353,mon요일 운영시간 누락 AED 수
+missing_mon,364,mon요일 운영시간 누락 AED 수
 invalid_tue,3,tue요일 운영시간 오류 AED 수
-missing_tue,128,tue요일 운영시간 누락 AED 수
+missing_tue,134,tue요일 운영시간 누락 AED 수
 invalid_wed,3,wed요일 운영시간 오류 AED 수
-missing_wed,103,wed요일 운영시간 누락 AED 수
+missing_wed,107,wed요일 운영시간 누락 AED 수
 invalid_thu,3,thu요일 운영시간 오류 AED 수
-missing_thu,99,thu요일 운영시간 누락 AED 수
+missing_thu,104,thu요일 운영시간 누락 AED 수
 invalid_fri,3,fri요일 운영시간 오류 AED 수
-missing_fri,113,fri요일 운영시간 누락 AED 수
+missing_fri,118,fri요일 운영시간 누락 AED 수
 invalid_sat,0,sat요일 운영시간 오류 AED 수
-missing_sat,3335,sat요일 운영시간 누락 AED 수
+missing_sat,3368,sat요일 운영시간 누락 AED 수
 invalid_sun,0,sun요일 운영시간 오류 AED 수
-missing_sun,3943,sun요일 운영시간 누락 AED 수
+missing_sun,3994,sun요일 운영시간 누락 AED 수
 invalid_hol,0,hol요일 운영시간 오류 AED 수
-missing_hol,4324,hol요일 운영시간 누락 AED 수
+missing_hol,4387,hol요일 운영시간 누락 AED 수
 invalid_reason_운영시간이 최대 허용시간을 초과합니다: 1500분,15,운영시간 오류 원인별 발생 건수

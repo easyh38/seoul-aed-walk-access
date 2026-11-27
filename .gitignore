@@ -1,5 +1,3 @@
-prd.md
-guideline.pdf
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -242,8 +240,6 @@ data/*
 !data/clean/
 data/raw/*
 data/clean/*
-!data/raw/.gitkeep
-!data/clean/.gitkeep
 
 # 자치구 경계 원본 파일 (SGIS / OSM 행정경계)
 *.shp
