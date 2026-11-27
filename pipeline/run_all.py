@@ -39,6 +39,7 @@ STEPS = [
     ("grid", "05_generate_grid.py", ["--apply", "--replace"], "격자 다시 생성 → grid_point"),
     ("accessibility", "06_analyze_accessibility.py", ["--apply", "--replace"], "직선/실보행 판정 → grid_point"),
     ("metrics", "07_build_metrics.py", ["--apply"], "편도·왕복 지표·레이어 → metrics, layer, results/metrics.csv"),
+    ("plots", "plot_metrics.py", [], "metrics.csv → 접근성 분석 그래프 3개"),
 ]
 STEP_NAMES = [s[0] for s in STEPS]
 
@@ -52,7 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--from", dest="start", choices=STEP_NAMES, default=STEP_NAMES[0],
                         help="이 단계부터 실행 (기본: collect)")
     parser.add_argument("--to", dest="end", choices=STEP_NAMES, default=STEP_NAMES[-1],
-                        help="이 단계까지 실행 (기본: metrics)")
+                        help="이 단계까지 실행 (기본: plots)")
     parser.add_argument("--isochrone-limit", type=int, default=None, metavar="N",
                         help="isochrone 단계에서 AED N개만 처리 (기본: 전체)")
     parser.add_argument("--availability-at", action="append", default=[], metavar="DATETIME",

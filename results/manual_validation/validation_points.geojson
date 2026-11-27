@@ -1,0 +1,366 @@
+{
+  "type": "FeatureCollection",
+  "name": "validation_points",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.140630444,
+          37.534819825
+        ]
+      },
+      "properties": {
+        "sample_no": 1,
+        "sample_type": "2·4분 모두 접근 가능",
+        "grid_id": 59039,
+        "district": "강동구",
+        "walk_2_db": true,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.024586934,
+          37.628149683
+        ]
+      },
+      "properties": {
+        "sample_no": 2,
+        "sample_type": "2·4분 모두 접근 가능",
+        "grid_id": 16546,
+        "district": "강북구",
+        "walk_2_db": true,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.0521417,
+          37.568768753
+        ]
+      },
+      "properties": {
+        "sample_no": 3,
+        "sample_type": "2·4분 모두 접근 가능",
+        "grid_id": 9497,
+        "district": "동대문구",
+        "walk_2_db": true,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          126.922790723,
+          37.602458167
+        ]
+      },
+      "properties": {
+        "sample_no": 4,
+        "sample_type": "2·4분 모두 접근 가능",
+        "grid_id": 23933,
+        "district": "은평구",
+        "walk_2_db": true,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.074460418,
+          37.626537412
+        ]
+      },
+      "properties": {
+        "sample_no": 5,
+        "sample_type": "2·4분 모두 접근 가능",
+        "grid_id": 20864,
+        "district": "노원구",
+        "walk_2_db": true,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          126.863257279,
+          37.542663463
+        ]
+      },
+      "properties": {
+        "sample_no": 6,
+        "sample_type": "2·4분 모두 접근 가능",
+        "grid_id": 30811,
+        "district": "양천구",
+        "walk_2_db": true,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.057531405,
+          37.614757706
+        ]
+      },
+      "properties": {
+        "sample_no": 7,
+        "sample_type": "4분만 접근 가능",
+        "grid_id": 14566,
+        "district": "성북구",
+        "walk_2_db": false,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.045528247,
+          37.538998894
+        ]
+      },
+      "properties": {
+        "sample_no": 8,
+        "sample_type": "4분만 접근 가능",
+        "grid_id": 6560,
+        "district": "성동구",
+        "walk_2_db": false,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.056103503,
+          37.664325954
+        ]
+      },
+      "properties": {
+        "sample_no": 9,
+        "sample_type": "4분만 접근 가능",
+        "grid_id": 19537,
+        "district": "노원구",
+        "walk_2_db": false,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          126.837366704,
+          37.526296789
+        ]
+      },
+      "properties": {
+        "sample_no": 10,
+        "sample_type": "4분만 접근 가능",
+        "grid_id": 30286,
+        "district": "양천구",
+        "walk_2_db": false,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.122702397,
+          37.498709547
+        ]
+      },
+      "properties": {
+        "sample_no": 11,
+        "sample_type": "4분만 접근 가능",
+        "grid_id": 56766,
+        "district": "송파구",
+        "walk_2_db": false,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.066851875,
+          37.57062634
+        ]
+      },
+      "properties": {
+        "sample_no": 12,
+        "sample_type": "4분만 접근 가능",
+        "grid_id": 10071,
+        "district": "동대문구",
+        "walk_2_db": false,
+        "walk_4_db": true
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.09088822,
+          37.523841704
+        ]
+      },
+      "properties": {
+        "sample_no": 13,
+        "sample_type": "2·4분 모두 접근 불가",
+        "grid_id": 55210,
+        "district": "송파구",
+        "walk_2_db": false,
+        "walk_4_db": false
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.045959664,
+          37.467793212
+        ]
+      },
+      "properties": {
+        "sample_no": 14,
+        "sample_type": "2·4분 모두 접근 불가",
+        "grid_id": 49165,
+        "district": "서초구",
+        "walk_2_db": false,
+        "walk_4_db": false
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.06143824,
+          37.528242797
+        ]
+      },
+      "properties": {
+        "sample_no": 15,
+        "sample_type": "2·4분 모두 접근 불가",
+        "grid_id": 7290,
+        "district": "광진구",
+        "walk_2_db": false,
+        "walk_4_db": false
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          126.835819273,
+          37.57315795
+        ]
+      },
+      "properties": {
+        "sample_no": 16,
+        "sample_type": "2·4분 모두 접근 불가",
+        "grid_id": 34295,
+        "district": "강서구",
+        "walk_2_db": false,
+        "walk_4_db": false
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.096289064,
+          37.571632027
+        ]
+      },
+      "properties": {
+        "sample_no": 17,
+        "sample_type": "2·4분 모두 접근 불가",
+        "grid_id": 11465,
+        "district": "중랑구",
+        "walk_2_db": false,
+        "walk_4_db": false
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          126.914578211,
+          37.63847116
+        ]
+      },
+      "properties": {
+        "sample_no": 18,
+        "sample_type": "2·4분 모두 접근 불가",
+        "grid_id": 23493,
+        "district": "은평구",
+        "walk_2_db": false,
+        "walk_4_db": false
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.005285888,
+          37.633478364
+        ]
+      },
+      "properties": {
+        "sample_no": 19,
+        "sample_type": "2·4분 모두 접근 불가",
+        "grid_id": 15590,
+        "district": "강북구",
+        "walk_2_db": false,
+        "walk_4_db": false
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.081183945,
+          37.640081569
+        ]
+      },
+      "properties": {
+        "sample_no": 20,
+        "sample_type": "역전 사례 (2분 가능·4분 불가)",
+        "grid_id": 21396,
+        "district": "노원구",
+        "walk_2_db": true,
+        "walk_4_db": false
+      }
+    }
+  ]
+}
