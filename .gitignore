@@ -237,9 +237,7 @@ valhalla_tiles.tar
 # 데이터: API 원본 응답, 정제 결과 (재생성 가능)
 data/*
 !data/raw/
-!data/clean/
 data/raw/*
-data/clean/*
 
 # 자치구 경계 원본 파일 (SGIS / OSM 행정경계)
 *.shp
