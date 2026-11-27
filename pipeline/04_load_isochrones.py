@@ -30,10 +30,18 @@ UPSERT_SQL = text("""
     VALUES (
         :aed_id,
         :minutes,
+        -- Valhalla 등시선은 가끔 경계가 스스로 교차한다(Self-intersection).
+        -- ST_MakeValid로 고치면 다각형+선이 섞인 GeometryCollection이 될 수 있어
+        -- ST_CollectionExtract(..., 3)로 다각형만 남긴다. 유효한 도형은 그대로 통과한다
         ST_Multi(
-            ST_SetSRID(
-                ST_GeomFromGeoJSON(:geojson),
-                4326
+            ST_CollectionExtract(
+                ST_MakeValid(
+                    ST_SetSRID(
+                        ST_GeomFromGeoJSON(:geojson),
+                        4326
+                    )
+                ),
+                3
             )
         )
     )
