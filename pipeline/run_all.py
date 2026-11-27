@@ -32,6 +32,7 @@ PROJECT_ROOT = PIPELINE_DIR.parent
 STEPS = [
     ("collect", "01_collect.py", [], "AED API 전체 수집 → data/raw/"),
     ("clean", "02_clean.py", [], "정제·운영시간 해석 → data/clean/aed.csv"),
+    ("refine", "02_refine_location.py", ["--apply"], "아파트 동 재배치·위치 의심 표시 → data/clean/aed.csv, results/location_review.csv"),
     ("district", "03_load_district.py", ["--apply"], "자치구 경계 → district"),
     ("aed", "03_load_aed.py", ["--apply", "--prune"], "정제 AED → aed (CSV에 없는 AED 삭제)"),
     ("isochrone", "04_isochrone.py", ["--all"], "Valhalla 2·4분 등시선 → results/isochrones/"),

@@ -9,9 +9,9 @@ import { AED_MIN_ZOOM, CIRCLE_MIN_ZOOM, MapView } from "./map.js";
 
 const MODES = {
   oneway: { minutes: 4, radius: 340, label: "편도 4분",
-    desc: "AED까지 걸어서 4분 안에 닿는지로 판정합니다." },
+    desc: "AED까지 걸어서 4분 안에 닿는 곳을 셉니다." },
   roundtrip: { minutes: 2, radius: 170, label: "왕복 기준 (편도 2분)",
-    desc: "AED를 가지고 돌아오는 시간까지 생각해, 편도 2분 안에 닿는지로 판정합니다." },
+    desc: "AED를 가지고 돌아와야 하니, 편도 2분 안에 닿는 곳만 셉니다." },
 };
 
 const state = {
@@ -35,7 +35,12 @@ const mobileQuery = window.matchMedia("(max-width: 767.98px)");
 
 hydrateIcons();
 
-const view = new MapView($("#map"), { onMapClick, onAedClick });
+// Leaflet은 지도를 누르면 지도에 포커스를 준다. 이때 키보드용 포커스 테두리가 지도 전체에 생기지 않게
+// 마지막 입력 방식을 기록해 CSS에서 마우스·터치일 때만 지도 테두리를 숨긴다
+document.addEventListener("pointerdown", () => document.body.classList.add("pointer-input"), true);
+document.addEventListener("keydown", () => document.body.classList.remove("pointer-input"), true);
+
+const view = new MapView($("#map"), { onMapClick, onAedClick, onAedGroupClick });
 // 브라우저 콘솔·화면 테스트에서 지도를 직접 움직여 볼 수 있게 열어 둔다 (동작에는 영향 없음)
 window.aedApp = { map: view.map };
 
@@ -135,7 +140,8 @@ function renderModeTexts() {
   $("#mode-desc").textContent = m.desc;
   $("[data-minutes-text]").textContent = `걸어서 ${m.minutes}분 안에 AED에 닿는 곳`;
   $("[data-minutes-text-dead]").textContent = `${m.minutes}분 안에 어떤 AED에도 닿지 못하는 곳`;
-  $("[data-radius-text]").textContent = `AED마다 반경 ${Math.round(radiusFor(state.mode))}m, 동네 수준으로 확대 시 표시`;
+  $("[data-tip-text]").textContent = `직선거리 원과 실보행 도달 구역을 함께 켜 보세요. 원 안인데도 걸어서는 ${m.minutes}분 안에 닿지 못하는 곳이 보입니다.`;
+  $("[data-radius-text]").textContent = `AED마다 반경 ${Math.round(radiusFor(state.mode))}m. 동네 수준으로 확대하면\u00A0보입니다`;
 }
 
 document.querySelectorAll(".segmented [data-mode]").forEach((btn) => {
@@ -158,7 +164,7 @@ document.querySelectorAll(".switch[data-layer]").forEach((sw) => {
     state.layers[name] = !state.layers[name];
     sw.setAttribute("aria-checked", String(state.layers[name]));
     if (name === "coverage" || name === "deadzone") refreshPolygon(name);
-    else loadAeds();
+    else loadAeds({ force: true });
   });
 });
 
@@ -206,56 +212,85 @@ async function refreshPolygons(opts) {
 
 // ================================================================ AED 마커, 직선거리 원
 
-let aedAbort = null;
-let aedTimer = null;
+// AED 목록은 서울 전체를 처음 한 번만 받는다 (gzip 약 0.7MB).
+// 화면 범위마다 다시 받으면 지도를 움직일 때마다 수 MB를 받고 마커를 새로 만들어 버벅인다.
+const SEOUL_BBOX = { west: 126.6, south: 37.35, east: 127.3, north: 37.8 };
+let allAedsPromise = null; // Promise<features>
+let liveStatusPromise = null; // Promise<{ at, statuses: Map }>: 실시간 반영을 켤 때마다 새로 받는다
+let drawn = null; // 지금 그려 둔 범위·줌·조건. 이 안에서 움직이면 다시 그리지 않는다
+let aedSeq = 0;
+
+function allAeds() {
+  if (!allAedsPromise) {
+    allAedsPromise = api.aeds(SEOUL_BBOX).then((r) => r.features);
+    allAedsPromise.catch(() => { allAedsPromise = null; }); // 실패하면 다음에 다시 시도
+  }
+  return allAedsPromise;
+}
+
+function liveStatuses() {
+  if (!liveStatusPromise) {
+    // open_now=true는 운영 중(available·unknown)만 돌려준다. 목록에 없는 AED는 운영 종료(회색)
+    liveStatusPromise = api.aeds(SEOUL_BBOX, { openNow: true }).then((r) => ({
+      at: r.open_now?.at,
+      statuses: new Map(r.features.map((f) => [f.properties.id, f.properties.open_status])),
+    }));
+    liveStatusPromise.catch(() => { liveStatusPromise = null; });
+  }
+  return liveStatusPromise;
+}
 
 function needAeds() {
   const z = view.zoom();
   return (state.layers.aeds && z >= AED_MIN_ZOOM) || (state.layers.circles && z >= CIRCLE_MIN_ZOOM);
 }
 
-async function loadAeds({ animate = false } = {}) {
-  if (aedAbort) aedAbort.abort();
+/** force: 레이어 켜기/끄기, 실시간 반영 전환처럼 같은 범위라도 다시 그려야 할 때 */
+async function loadAeds({ animate = false, force = false } = {}) {
+  const seq = ++aedSeq;
   setChip("aeds", state.layers.aeds && view.zoom() < AED_MIN_ZOOM ? "확대하면 AED 위치가 보입니다" : null);
   if (!needAeds()) {
+    drawn = null;
     view.clearAeds();
     state.aedFeatures = [];
     renderCircles();
     return;
   }
-  aedAbort = new AbortController();
-  const { signal } = aedAbort;
-  const bbox = view.bbox();
+  const bounds = view.map.getBounds();
+  const zoom = view.zoom();
+  const key = `${state.live}|${state.layers.aeds}`;
+  if (!force && drawn && drawn.zoom === zoom && drawn.key === key && drawn.bounds.contains(bounds)) return;
+
   try {
-    // 실시간 반영 ON: open_now=true는 운영 중(available·unknown)만 돌려주므로
-    // 전체 목록과 같이 받아 나머지를 운영 종료(회색)로 표시한다
-    const [all, open] = await Promise.all([
-      api.aeds(bbox, { signal }),
-      state.live ? api.aeds(bbox, { openNow: true, signal }) : null,
-    ]);
-    let statuses = null;
-    if (open) {
-      statuses = new Map(open.features.map((f) => [f.properties.id, f.properties.open_status]));
-      if (open.open_now?.at) setLiveAt(open.open_now.at);
-    }
+    const [features, live] = await Promise.all([allAeds(), state.live ? liveStatuses() : null]);
+    if (seq !== aedSeq) return;
+    if (live?.at) setLiveAt(live.at);
+    // 화면보다 사방으로 30%씩 넓게 그려 두고, 그 안에서 움직이는 동안은 다시 그리지 않는다
+    const padded = bounds.pad(0.3);
+    const visible = features.filter((f) => {
+      const [lon, lat] = f.geometry.coordinates;
+      return padded.contains([lat, lon]);
+    });
     const swap = () => {
-      state.aedFeatures = all.features;
-      state.statuses = statuses;
-      if (state.layers.aeds) view.setAeds(all.features, statuses);
+      state.aedFeatures = visible;
+      state.statuses = live ? live.statuses : null;
+      if (state.layers.aeds) view.setAeds(visible, state.statuses);
       else view.clearAeds();
       renderCircles();
+      drawn = { bounds: padded, zoom, key };
     };
     if (animate) await view.fade(["aeds", "circles"], swap);
     else swap();
   } catch (err) {
-    if (err.name !== "AbortError") showBanner(MESSAGES.server, "bad");
+    if (seq === aedSeq) showBanner(MESSAGES.server, "bad");
   }
 }
 
 function scheduleAeds() {
   clearTimeout(aedTimer);
-  aedTimer = setTimeout(loadAeds, 250);
+  aedTimer = setTimeout(loadAeds, 150);
 }
+let aedTimer = null;
 
 function renderCircles() {
   const wantCircles = state.layers.circles;
@@ -274,7 +309,25 @@ $("#zoom-out").addEventListener("click", () => view.zoomBy(-1));
 let lastPopupClose = 0;
 view.map.on("popupclose", () => { lastPopupClose = performance.now(); });
 
-function popupHtml(feature, status) {
+// 좌표 출처·위치 의심 안내 (02_refine_location). 팝업과 찾기 결과 카드가 같이 쓴다
+function locationNoteHtml(p, className) {
+  const flags = p.location_flags || [];
+  if (flags.length) {
+    return `<div class="${className} ${className}--warn">${icon("warning", { size: 16 })}
+      <span>지도 위치가 실제 설치 위치와 다를 수 있습니다. 설치 장소 안내를 함께 확인하세요.</span></div>`;
+  }
+  if (p.location_source && p.location_source !== "api") {
+    return `<div class="${className}">${icon("info", { size: 16 })}
+      <span>주소 좌표는 단지 전체를 가리켜서, 설치 장소에 적힌 건물(예: 101동) 위치로 옮겨 표시했습니다.</span></div>`;
+  }
+  return "";
+}
+
+function liveStatusOf(feature) {
+  return state.live ? state.statuses?.get(feature.properties.id) || "unavailable" : undefined;
+}
+
+function popupHtml(feature, status, { back = 0 } = {}) {
   const p = feature.properties;
   const hours = hoursRows(p.hours)
     .map(([d, t]) => `<li><b>${esc(d)}</b><span>${esc(t)}</span></li>`).join("");
@@ -284,8 +337,10 @@ function popupHtml(feature, status) {
   return `
     <div class="aed-pop">
       <button class="icon-btn aed-pop__close" type="button" data-act="close" aria-label="닫기">${icon("close")}</button>
+      ${back ? `<button class="btn btn--ghost aed-pop__back" type="button" data-act="back">${icon("back", { size: 16 })}AED ${back}대 목록으로</button>` : ""}
       <h3 class="title">${esc(p.place || "설치 장소 정보 없음")}</h3>
       <p class="small muted">${esc(p.address || "")}</p>
+      ${locationNoteHtml(p, "aed-pop__note")}
       <ul class="aed-pop__hours" aria-label="운영시간">${hours}</ul>
       <div class="aed-pop__status"><span class="muted">현재 상태</span><span data-status>${statusHtml}</span></div>
       <div class="aed-pop__actions">
@@ -295,13 +350,45 @@ function popupHtml(feature, status) {
     </div>`;
 }
 
-async function onAedClick(feature, marker) {
-  const known = state.live ? marker.status : undefined;
-  const popup = view.openPopup(marker, popupHtml(feature, known));
+/** 화면에서 겹친 AED 목록 (같은 건물·단지이거나 몇 m 거리). 하나를 고르면 그 AED의 상세 팝업으로 바뀐다 */
+function onAedGroupClick(features, marker, { samePoint = true } = {}) {
+  const sorted = [...features].sort((a, b) =>
+    (a.properties.place || "").localeCompare(b.properties.place || "", "ko", { numeric: true }));
+  const addresses = new Set(sorted.map((f) => f.properties.address || ""));
+  const items = sorted.map((f, i) => {
+    const pill = state.live ? statusPill(liveStatusOf(f)) || "" : "";
+    return `<li><button type="button" data-idx="${i}">
+      <span class="aed-stack-list__place">${esc(f.properties.place || "설치 장소 정보 없음")}</span>${pill}</button></li>`;
+  }).join("");
+  const flagged = sorted.find((f) => (f.properties.location_flags || []).length);
+  const html = `
+    <div class="aed-pop">
+      <button class="icon-btn aed-pop__close" type="button" data-act="close" aria-label="닫기">${icon("close")}</button>
+      <h3 class="title">${samePoint ? "이 지점에" : "이 근처에"} AED ${sorted.length}대</h3>
+      <p class="small muted">${esc(addresses.size === 1 ? sorted[0].properties.address || "" : "주소가 서로 다른 AED가 함께 있습니다")}</p>
+      ${flagged ? locationNoteHtml(flagged.properties, "aed-pop__note") : `
+      <div class="aed-pop__note">${icon("info", { size: 16 })}
+        <span>${samePoint
+          ? "지도 좌표가 건물 단위라 한 지점에 모여 보입니다. 층·동 등 설치 장소를 확인하세요."
+          : "가까이 붙어 있어 하나로 묶었습니다. 지도를 더 확대하면 따로 보입니다."}</span></div>`}
+      <ul class="aed-stack-list" aria-label="설치 장소 목록">${items}</ul>
+    </div>`;
+  const popup = view.openPopup(marker, html);
+  const root = popup.getElement();
+  root.querySelector('[data-act="close"]').addEventListener("click", () => view.closePopup());
+  root.querySelectorAll("[data-idx]").forEach((btn) => btn.addEventListener("click", () => {
+    onAedClick(sorted[Number(btn.dataset.idx)], marker, { group: features, samePoint });
+  }));
+}
+
+async function onAedClick(feature, marker, { group, samePoint } = {}) {
+  const known = liveStatusOf(feature);
+  const popup = view.openPopup(marker, popupHtml(feature, known, { back: group ? group.length : 0 }));
   const root = popup.getElement();
   root.querySelector('[data-act="route"]').addEventListener("click", () => routeToAed(feature));
   root.querySelector('[data-act="report"]').addEventListener("click", () => openReport(feature));
   root.querySelector('[data-act="close"]').addEventListener("click", () => view.closePopup());
+  root.querySelector('[data-act="back"]')?.addEventListener("click", () => onAedGroupClick(group, marker, { samePoint }));
 
   if (known !== undefined) return;
   // 실시간 반영 OFF: 이 AED 하나만 지금 운영 중인지 물어본다 (작은 범위 + open_now)
@@ -326,7 +413,7 @@ function routeToAed(feature) {
   }
   state.pendingAed = feature;
   setChip("pending", `${icon("pin", { size: 16 })} 출발점을 지도에서 눌러 주세요 ` +
-    `<button class="btn btn--ghost" type="button" data-cancel style="min-height:28px;padding:0 10px">취소</button>`);
+    `<button class="chip-btn" type="button" data-cancel>취소</button>`);
   $("#map-chip [data-cancel]").addEventListener("click", () => {
     state.pendingAed = null;
     setChip("pending", null);
@@ -396,10 +483,32 @@ function goldenPill(seconds) {
     : `<span class="pill pill--warn">${limit}분 넘음</span>`;
 }
 
+/** 결과 카드 안에 넣는 안내 줄: 위치 의심, 운영 종료, 직선거리 1위와 다름.
+ *  따로 상자를 쌓지 않고 카드 안에 구분선 아래 줄로 넣는다 */
+function resultNotes(res) {
+  const n = res.nearest;
+  const sf = res.straight_first;
+  const notes = [];
+  const loc = locationNoteHtml(n, "result-note");
+  if (loc) notes.push(loc);
+  if (!state.live && n.open_status === "unavailable") {
+    notes.push(`<div class="result-note result-note--info">${icon("clock", { size: 16 })}
+      <span>이 AED는 지금 운영시간이 아닙니다. 실시간 반영을 켜면 운영 중인 AED만 찾습니다.</span></div>`);
+  }
+  if (!res.aedId && res.straight_first_differs && sf) {
+    const walkText = sf.walk_time_s == null
+      ? "걸어서 가는 경로가 없습니다."
+      : `실제로 걸으면 <b class="nowrap">${duration(sf.walk_time_s)}</b> 걸립니다.`;
+    notes.push(`<div class="result-note result-note--warn">${icon("walk", { size: 16 })}
+      <span>직선거리로 가장 가까운 AED는 <b>${esc(sf.place)}</b> <span class="nowrap">(${meters(sf.straight_distance_m)})입니다.</span>
+      ${walkText}</span></div>`);
+  }
+  return notes.length ? `<div class="result-notes">${notes.join("")}</div>` : "";
+}
+
 function renderFindResult(res) {
   const n = res.nearest;
   const chosen = Boolean(res.aedId);
-  const sf = res.straight_first;
   let html = `
     <div class="card">
       <div class="card__head">
@@ -417,28 +526,9 @@ function renderFindResult(res) {
         <span><span class="muted">도보 거리</span> <b class="num">${meters(n.walk_distance_m)}</b></span>
         <span><span class="muted">직선거리</span> <b class="num">${meters(n.straight_distance_m)}</b></span>
       </div>
+      ${resultNotes(res)}
       <p class="small muted">출발: ${esc(res.originLabel)}${state.live ? " · 지금 운영 중인 AED만" : ""}</p>
     </div>`;
-
-  if (!state.live && n.open_status === "unavailable") {
-    html += `
-      <div class="notice notice--info">
-        ${icon("clock")}
-        <span>이 AED는 지금 운영 종료입니다. 실시간 반영을 켜면 운영 중인 AED만 찾습니다.</span>
-      </div>`;
-  }
-
-  if (!chosen && res.straight_first_differs && sf) {
-    const walkText = sf.walk_time_s == null
-      ? "걸어서는 갈 수 없습니다"
-      : `실제로 걸으면 ${duration(sf.walk_time_s)} 걸립니다`;
-    html += `
-      <div class="notice notice--warn">
-        ${icon("walk")}
-        <span>직선거리로 가장 가까운 AED는 <b>${esc(sf.place)}</b>(직선 ${meters(sf.straight_distance_m)})이지만,
-        ${walkText}.</span>
-      </div>`;
-  }
 
   if (res.alternatives?.length) {
     html += `
@@ -523,7 +613,7 @@ form.addEventListener("submit", async (e) => {
   try {
     await api.report({ aed_id: reportTarget.properties.id, type, description: description || null });
     dialog.close();
-    showBanner("제보가 접수되었습니다. 확인 후 반영하겠습니다.", "ok");
+    showBanner("제보를 받았습니다. 확인한 뒤 반영하겠습니다.", "ok");
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) reportError(err.message);
     else if (err instanceof ApiError && err.status === 422) reportError("입력값을 확인해 주세요. 설명은 500자 이하입니다.");
@@ -545,9 +635,8 @@ function renderLiveButton() {
   btn.classList.toggle("btn--dark", state.live);
   btn.classList.toggle("btn--ghost", !state.live);
   btn.setAttribute("aria-pressed", String(state.live));
-  const ic = $("#live-icon");
-  ic.className = state.live ? "live-dot" : "icon";
-  ic.innerHTML = state.live ? "" : icon("clock");
+  // 아이콘 칸(18px)은 그대로 두고 안만 바꾼다: 켤 때 글자가 옆으로 밀리지 않게
+  $("#live-icon").innerHTML = state.live ? '<span class="live-dot"></span>' : icon("clock");
   $("#live-label").textContent = state.live ? "실시간 반영 켜짐" : "실시간 반영 꺼짐";
   setLiveAt(state.live ? state.liveAt : null);
 }
@@ -557,10 +646,11 @@ $("#live-toggle").addEventListener("click", async () => {
   state.liveAt = null;
   renderLiveButton();
   if (state.live) {
-    showBanner("지금 운영 중인 AED만으로 다시 계산합니다. 처음 한 번은 몇 초 걸릴 수 있습니다.", "info");
+    showBanner("지금 운영 중인 AED만으로 다시 계산합니다. 처음 한\u00A0번은 몇\u00A0초 걸릴 수 있습니다.", "info");
   }
   // 지금 보이는 레이어는 그대로 두고 계산하다가, 새 결과가 오면 투명도 전환으로 바꾼다
-  loadAeds({ animate: true });
+  liveStatusPromise = null; // 켤 때마다 지금 시각 기준으로 새로 받는다
+  loadAeds({ animate: true, force: true });
   if (state.origin && state.lastResult) {
     findFrom(state.origin, { aedId: state.lastFind?.aedId, originLabel: state.originLabel });
   }
@@ -587,8 +677,8 @@ async function loadStats() {
     if (live) {
       $("#stats-live").innerHTML = `
         <div class="card" aria-busy="true">
-          <p class="eyebrow">평상시 vs 지금</p>
-          <p class="small muted">지금 운영 중인 AED 기준 커버리지를 계산하는 중입니다. 처음 한 번은 몇 초 걸릴 수 있습니다.</p>
+          <p class="eyebrow">평상시와 지금</p>
+          <p class="small muted">지금 운영 중인 AED로 도달 구역을 다시 계산하는 중입니다. 처음 한&nbsp;번은 몇&nbsp;초 걸릴 수 있습니다.</p>
         </div>`;
       const now = await api.stats(mode, { openNow: true });
       if (seq !== statsSeq) return;
@@ -609,14 +699,15 @@ function renderStats(data) {
   $("#stats-summary").innerHTML = s ? `
     <div class="card surface-deep">
       <p class="eyebrow">서울 전체 · ${esc(m.label)}</p>
-      <p class="lead">걸어서 ${m.minutes}분 안에 AED에 닿는 곳은 <span class="accent num">${pct(s.walk_pct)}</span></p>
+      <p class="lead">서울에서 걸어서 ${m.minutes}분 안에 AED에 닿는 곳은 <span class="accent num">${pct(s.walk_pct)}</span></p>
       <div class="stat-pair">
         <div><p class="small muted">직선거리 기준</p><p class="big-num">${pct(s.straight_pct)}</p></div>
         <div><p class="small muted">실보행 기준</p><p class="big-num">${pct(s.walk_pct)}</p></div>
       </div>
       <p class="small muted">
-        직선거리로 보면 <span class="num">${ppAbs(s.diff_pp)}</span> 더 넓게 잡힙니다 ·
-        사각지대 <span class="num">${km2(s.deadzone_km2)}</span> · AED <span class="num">${count(s.aed_count)}</span>개
+        직선거리로 보면 <span class="num nowrap">${ppAbs(s.diff_pp)}</span> 더 넓게 잡힙니다 ·
+        <span class="nowrap">사각지대 <span class="num">${km2(s.deadzone_km2)}</span></span> ·
+        <span class="nowrap">AED <span class="num">${count(s.aed_count)}</span>개</span>
       </p>
     </div>` : "";
 
@@ -626,7 +717,7 @@ function renderStats(data) {
     const rank = d.rank <= 3 ? `<span class="pill pill--ok" title="상위 3개 구">${d.rank}위</span>`
       : d.rank > n - 3 ? `<span class="pill pill--bad" title="하위 3개 구">${d.rank}위</span>` : `${d.rank}`;
     return `
-      <tr tabindex="0" data-gu="${esc(d.gu)}" aria-label="${esc(d.gu)}로 지도 이동">
+      <tr tabindex="0" data-gu="${esc(d.gu)}" aria-describedby="stats-row-hint">
         <td>${rank}</td>
         <td class="col-gu">${esc(d.gu)}</td>
         <td>${num1(d.walk_pct)}</td>
@@ -656,7 +747,7 @@ function renderLiveStats(base, now) {
   $("#stats-live").innerHTML = `
     <div class="card">
       <div class="card__head">
-        <p class="eyebrow">평상시 vs 지금</p>
+        <p class="eyebrow">평상시와 지금</p>
         <span class="small muted num">기준: ${esc(seoulTime(now.at))}${now.is_holiday ? " · 공휴일" : ""}</span>
       </div>
       <div class="stat-pair">

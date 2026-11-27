@@ -46,7 +46,9 @@ def aeds(
                     'geometry', ST_AsGeoJSON(geom)::json,
                     'properties', json_build_object(
                         'id', id, 'place', place, 'address', address,
-                        'gu', gu, 'hours', hours
+                        'gu', gu, 'hours', hours,
+                        'location_source', location_source,
+                        'location_flags', location_flags
                     )
                 ) ORDER BY id
             ), '[]'::json)
@@ -73,7 +75,9 @@ OPEN_AEDS_SQL = """
                 'geometry', ST_AsGeoJSON(a.geom)::json,
                 'properties', json_build_object(
                     'id', a.id, 'place', a.place, 'address', a.address,
-                    'gu', a.gu, 'hours', a.hours, 'open_status', o.status
+                    'gu', a.gu, 'hours', a.hours, 'open_status', o.status,
+                    'location_source', a.location_source,
+                    'location_flags', a.location_flags
                 )
             ) ORDER BY a.id
         ), '[]'::json)

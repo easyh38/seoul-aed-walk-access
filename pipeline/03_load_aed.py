@@ -28,6 +28,10 @@ DAY_TIME_FIELDS = {
     "hol": ("holSttTme", "holEndTme"),
 }
 
+# 02_refine_location이 다는 값 (CSV에 칼럼이 없으면 api / 표시 없음으로 적재)
+LOCATION_SOURCES = {"api", "osm_building"}
+LOCATION_FLAGS = {"gu_mismatch", "mixed_address"}
+
 SUNDAY_FLAG_FIELDS = (
     "sunFrtYon",
     "sunScdYon",
@@ -53,6 +57,8 @@ UPSERT_SQL = text("""
         address,
         gu,
         hours,
+        location_source,
+        location_flags,
         geom
     )
     VALUES (
@@ -61,6 +67,8 @@ UPSERT_SQL = text("""
         :address,
         :gu,
         CAST(:hours AS jsonb),
+        :location_source,
+        CAST(:location_flags AS text[]),
         ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)
     )
     ON CONFLICT (source_id)
@@ -69,6 +77,8 @@ UPSERT_SQL = text("""
         address = EXCLUDED.address,
         gu = EXCLUDED.gu,
         hours = EXCLUDED.hours,
+        location_source = EXCLUDED.location_source,
+        location_flags = EXCLUDED.location_flags,
         geom = EXCLUDED.geom
 """)
 
@@ -270,6 +280,16 @@ def load_records(conn) -> tuple[list[dict], Counter, Counter, set[str]]:
             )
 
             hours = build_hours(row)
+            location_source = (row.get("location_source") or "api").strip()
+            location_flags = [
+                flag for flag in (row.get("location_flags") or "").split(";")
+                if flag.strip()
+            ]
+            if location_source not in LOCATION_SOURCES:
+                raise ValueError(f"{serial}: 알 수 없는 location_source {location_source!r}")
+            unknown_flags = set(location_flags) - LOCATION_FLAGS
+            if unknown_flags:
+                raise ValueError(f"{serial}: 알 수 없는 location_flags {sorted(unknown_flags)}")
 
             records.append({
                 "source_id": serial,
@@ -283,6 +303,8 @@ def load_records(conn) -> tuple[list[dict], Counter, Counter, set[str]]:
                 ),
                 "lat": lat,
                 "lon": lon,
+                "location_source": location_source,
+                "location_flags": location_flags,
             })
 
             gu_counts[gu] += 1
@@ -292,6 +314,18 @@ def load_records(conn) -> tuple[list[dict], Counter, Counter, set[str]]:
         raise RuntimeError("AED 레코드 수와 고유 식별자 수가 다릅니다.")
 
     return records, gu_counts, gu_resolution_counts, seen_ids
+
+
+def print_location_summary(records: list[dict]) -> None:
+    sources = Counter(r["location_source"] for r in records)
+    flags = Counter(f for r in records for f in r["location_flags"])
+    print(f"좌표 출처: api {sources['api']:,} / osm_building {sources['osm_building']:,}")
+    print(
+        f"위치 의심: gu_mismatch {flags['gu_mismatch']:,} / "
+        f"mixed_address {flags['mixed_address']:,}"
+    )
+    if not sources["osm_building"] and not flags:
+        print("⚠ 위치 보정 결과가 없습니다. 02_refine_location.py --apply를 먼저 실행했는지 확인하세요.")
 
 
 def main() -> None:
@@ -342,6 +376,7 @@ def main() -> None:
             print(f"기존 DB AED 건수: {existing_count:,}")
             print(f"주소 기반 자치구 판정: {resolution_counts['address']:,}")
             print(f"좌표 기반 자치구 판정: {resolution_counts['spatial']:,}")
+            print_location_summary(records)
             print(
                 f"CSV에 없는 기존 AED: {stale['stale_count']:,}"
                 + (f" (예: {', '.join(stale['examples'])})" if stale["stale_count"] else "")

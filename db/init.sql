@@ -12,7 +12,11 @@ CREATE TABLE aed ( -- 정제된 AED
     address TEXT,
     gu TEXT REFERENCES district(name),
     hours JSONB, -- 요일별 운영시간 {"mon":["0900","1800"], ..., "sun":[...], "hol":[...]} (hol: 공휴일, S-06용)
-    geom geometry(Point, 4326)
+    geom geometry(Point, 4326),
+    -- 좌표 출처: api(원본 도로명주소 대표점) / osm_building(아파트 동 건물로 재배치, 02_refine_location)
+    location_source TEXT NOT NULL DEFAULT 'api' CHECK (location_source IN ('api', 'osm_building')),
+    -- 위치 의심 표시: gu_mismatch(주소·좌표 자치구 불일치) / mixed_address(같은 점에 주소가 다른 AED)
+    location_flags TEXT[] NOT NULL DEFAULT '{}'
 );
 CREATE INDEX aed_geom_idx ON aed USING GIST (geom);
 

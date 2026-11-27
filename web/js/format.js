@@ -76,7 +76,7 @@ function hhmm(value) {
 export function hoursRange(pair) {
   const [start, end] = Array.isArray(pair) ? pair : ["", ""];
   if (!start && !end) return "정보 없음";
-  if (!start || !end) return "정보 확인 필요";
+  if (!start || !end) return "정보 일부 없음";
   if ((start === "0000" && end === "2400") || (start === "0000" && end === "0000")) return "24시간";
   const overnight = Number(end) <= Number(start) && Number(end) < 2400;
   return `${hhmm(start)}-${overnight ? "다음날 " : ""}${hhmm(end)}`;
@@ -117,7 +117,7 @@ export function hoursRows(hours) {
 
 export const STATUS = {
   available: { cls: "pill--ok", text: "운영 중" },
-  unknown: { cls: "pill--info", text: "정보 없음 (운영 중으로 간주)" },
+  unknown: { cls: "pill--info", text: "정보 없음 (운영 중으로 봄)" },
   unavailable: { cls: "pill--bad", text: "운영 종료" },
 };
 
