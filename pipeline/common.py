@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import csv
 import os
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from sqlalchemy.engine import Engine
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+ISOCHRONE_FAILURES_PATH = PROJECT_ROOT / "results/isochrones/isochrone_failures.csv"
 
 # 환경변수가 이미 있으면 그 값을 쓰고, 없으면 .env에서 읽는다 (api/db.py와 같은 방식).
 # 6단계 Docker Compose에서는 .env 파일 대신 환경변수로 값이 들어온다.
@@ -83,3 +85,51 @@ def load_analysis_config() -> dict:
         checked[mode] = {"minutes": minutes, "radius_m": float(radius)}
 
     return {"grid_m": grid_m, "modes": checked}
+
+
+def load_isochrone_failures(path: Path = ISOCHRONE_FAILURES_PATH) -> dict[str, dict]:
+    """Valhalla 등시선 생성 실패 목록(04_isochrone.py 출력)을 읽고 검증한다.
+
+    04_load_isochrones와 08이 같은 규칙으로 읽도록 여기 한 곳에 둔다.
+    반환: {serialSeq: CSV 행}
+    """
+
+    if not path.exists():
+        raise FileNotFoundError(f"Isochrone 실패 목록이 없습니다: {path}")
+
+    failures = {}
+
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        required_fields = {"serialSeq", "attempts", "error"}
+
+        if not required_fields.issubset(set(reader.fieldnames or [])):
+            raise ValueError("Isochrone 실패 CSV의 필수 컬럼이 부족합니다.")
+
+        for line_number, row in enumerate(reader, start=2):
+            serial = (row.get("serialSeq") or "").strip()
+
+            if not serial:
+                raise ValueError(
+                    f"실패 CSV {line_number}행: AED 식별자가 없습니다."
+                )
+
+            if serial in failures:
+                raise ValueError(f"중복 실패 AED 식별자: {serial}")
+
+            try:
+                attempts = int(row.get("attempts") or "")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{serial}: 재시도 횟수가 올바르지 않습니다."
+                ) from exc
+
+            if attempts < 1:
+                raise ValueError(f"{serial}: 재시도 횟수는 1 이상이어야 합니다.")
+
+            if not (row.get("error") or "").strip():
+                raise ValueError(f"{serial}: 실패 사유가 비어 있습니다.")
+
+            failures[serial] = row
+
+    return failures
