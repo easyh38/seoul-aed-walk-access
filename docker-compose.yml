@@ -29,7 +29,9 @@ services:
       start_period: 10s
 
   valhalla:
-    image: ghcr.io/valhalla/valhalla-scripted:latest
+    # 타일을 빌드한 이미지 그대로 고정 (Valhalla 3.9.2-b95151088, 2026-11-16 빌드).
+    # latest는 새 버전이 나오면 바뀌어 타일·경로 결과가 달라질 수 있다
+    image: ghcr.io/valhalla/valhalla-scripted@sha256:7a1c2e6c86122af34c315430c646fe5790f9dc3275c47ad586453411a12ee6a2
     restart: unless-stopped
     command: ["build_tiles"]
     ports:
@@ -67,12 +69,16 @@ services:
         condition: service_started
 
   nginx:
-    image: nginx:alpine
+    image: nginx:1.31.10-alpine
     restart: unless-stopped
+    environment:
+      # VWorld 배경지도 키 (.env). 비우면 OSM 지도. nginx/templates/vworld.conf.template 참고
+      VWORLD_KEY: ${VWORLD_KEY:-}
     ports:
       - "127.0.0.1:8080:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/templates:/etc/nginx/templates:ro
       - ./web:/usr/share/nginx/html:ro
     depends_on:
       api:

@@ -116,7 +116,7 @@ def fetch_page(page_no):
         raise RuntimeError(
             f"{page_no}페이지 API 요청 실패: "
             f"{type(error).__name__}"
-        ) from error
+        ) from None  # 원래 예외 메시지에는 serviceKey가 든 요청 주소가 있어 로그에 키가 남는다
 
     try:
         root = ET.fromstring(response.content)

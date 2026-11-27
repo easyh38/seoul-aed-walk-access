@@ -375,6 +375,12 @@ def main() -> None:
             if insert_rows:
                 conn.execute(UPSERT_SQL, insert_rows)
 
+            # 실시간 반영 캐시는 운영 중 AED id 집합의 해시로만 최신 여부를 판단한다.
+            # AED id는 그대로인데 등시선만 바뀐 경우(좌표 보정 등)를 놓치지 않게 함께 비운다.
+            cleared_cache = conn.execute(
+                text("DELETE FROM public.coverage_cache")
+            ).rowcount
+
             verification = conn.execute(
                 VERIFY_SQL,
                 {"source_ids": sorted_success_ids},
@@ -431,6 +437,7 @@ def main() -> None:
         print(f"등시선 생성 성공 AED: {verification['unique_aed']:,}개")
         print(f"등시선 생성 실패 AED: {len(failed_ids):,}개")
         print(f"실패 AED에서 제거한 기존 등시선: {deleted_failed:,}개")
+        print(f"비운 실시간 반영 캐시(coverage_cache): {cleared_cache:,}건")
         print(f"2분 영역: {verification['two_minutes']:,}개")
         print(f"4분 영역: {verification['four_minutes']:,}개")
         print("NULL Geometry: 0")

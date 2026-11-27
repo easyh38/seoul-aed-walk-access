@@ -162,67 +162,6 @@ def test_unknown_reason_when_previous_day_hours_missing():
     assert result.previous_day_schedule_reason == "hours_missing"
 
 
-def test_unknown_reason_when_today_hours_missing():
-    from pipeline.availability import get_availability_detail
-
-    record = make_record(
-        satSttTme="",
-        satEndTme="",
-    )
-
-    result = get_availability_detail(
-        record,
-        datetime(2026, 11, 21, 21, 51),
-    )
-
-    assert result.status == "unknown"
-    assert result.reason == "today_schedule_unknown"
-    assert result.today_schedule_reason == "hours_missing"
-    assert result.previous_day_schedule_reason == "hours_valid"
-
-
-def test_unknown_reason_when_both_days_hours_missing():
-    from pipeline.availability import get_availability_detail
-
-    record = make_record(
-        satSttTme="",
-        satEndTme="",
-        friSttTme="",
-        friEndTme="",
-    )
-
-    result = get_availability_detail(
-        record,
-        datetime(2026, 11, 21, 21, 51),
-    )
-
-    assert result.status == "unknown"
-    assert result.reason == "today_and_previous_day_schedule_unknown"
-    assert result.today_schedule_reason == "hours_missing"
-    assert result.previous_day_schedule_reason == "hours_missing"
-
-
-def test_unknown_reason_when_previous_day_hours_missing():
-    from pipeline.availability import get_availability_detail
-
-    record = make_record(
-        friSttTme="",
-        friEndTme="",
-        satSttTme="0900",
-        satEndTme="1800",
-    )
-
-    result = get_availability_detail(
-        record,
-        datetime(2026, 11, 21, 21, 51),
-    )
-
-    assert result.status == "unknown"
-    assert result.reason == "previous_day_schedule_unknown"
-    assert result.today_schedule_reason == "hours_valid"
-    assert result.previous_day_schedule_reason == "hours_missing"
-
-
 def test_missing_hours_policy_open():
     from pipeline.availability import get_availability_detail
 

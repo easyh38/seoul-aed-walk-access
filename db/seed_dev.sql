@@ -1,5 +1,5 @@
 -- 개발용 가짜 데이터 (3단계 파이프라인 결과가 나오기 전 API 개발용)
--- 실행: docker exec -i aed-db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1' < db/seed_dev.sql
+-- 실행: docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1' < db/seed_dev.sql
 -- 여러 번 실행해도 중복이 쌓이지 않는다 (source_id 기준 덮어쓰기, pipeline_run은 비어 있을 때만 추가)
 -- 진짜 데이터는 3단계 03_load가 넣는다. 가짜 AED는 source_id가 'TEST'로 시작한다.
 

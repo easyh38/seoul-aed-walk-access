@@ -9,7 +9,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from datetime import date
+import re
+import shutil
+import subprocess
+from datetime import date, datetime
 from pathlib import Path
 
 from sqlalchemy import text
@@ -586,6 +589,36 @@ def write_metrics_csv(rows) -> None:
             writer.writerow({k: row[k] for k in CSV_COLUMNS})
 
 
+# 기준일 기본값을 실제 입력 파일에서 읽는다 (값을 코드에 박아 두면 데이터를 새로 받아도 옛 날짜가 기록된다)
+PROJECT_DIR = Path(__file__).resolve().parents[1]
+CLEANING_REPORT_PATH = PROJECT_DIR / "results/cleaning_report.csv"
+OSM_PBF_PATH = PROJECT_DIR / "valhalla/custom_files/seoul.osm.pbf"
+
+
+def detect_aed_date(report_path: Path = CLEANING_REPORT_PATH) -> str:
+    """정제 보고서의 원본 파일 이름(aed_seoul_YYYYMMDD_*.json)에서 AED 수집일을 읽는다."""
+    with report_path.open(encoding="utf-8-sig", newline="") as f:
+        for row in csv.reader(f):
+            if row and row[0] == "source_file":
+                match = re.search(r"aed_seoul_(\d{8})", row[1])
+                if match:
+                    return datetime.strptime(match.group(1), "%Y%m%d").date().isoformat()
+    raise ValueError(f"정제 보고서에서 원본 파일 이름을 찾지 못했습니다: {report_path}")
+
+
+def detect_osm_date(pbf_path: Path = OSM_PBF_PATH) -> str:
+    """OSM 지도 기준일: 파일 안 마지막 수정 시각(osmium), 없으면 파일 수정일."""
+    if shutil.which("osmium"):
+        result = subprocess.run(
+            ["osmium", "fileinfo", "-e", "-g", "data.timestamp.last", str(pbf_path)],
+            capture_output=True, text=True, check=False,
+        )
+        value = result.stdout.strip()
+        if result.returncode == 0 and value:
+            return value[:10]
+    return date.fromtimestamp(pbf_path.stat().st_mtime).isoformat()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="서울 AED 접근성 통계 및 사각지대 레이어 생성 (편도·왕복)"
@@ -597,15 +630,18 @@ def main() -> None:
     )
     parser.add_argument(
         "--osm-date",
-        default="2026-11-09",
-        help="사용한 OSM 데이터 기준일 (기본: 2026-11-09)",
+        default=None,
+        help="사용한 OSM 데이터 기준일 (기본: seoul.osm.pbf의 마지막 수정 시각)",
     )
     parser.add_argument(
         "--aed-date",
-        default="2026-11-10",
-        help="사용한 AED 원본 데이터 기준일 (기본: 2026-11-10)",
+        default=None,
+        help="사용한 AED 원본 데이터 기준일 (기본: 정제 보고서의 원본 파일 날짜)",
     )
     args = parser.parse_args()
+    args.osm_date = args.osm_date or detect_osm_date()
+    args.aed_date = args.aed_date or detect_aed_date()
+    print(f"데이터 기준일: OSM {args.osm_date}, AED {args.aed_date}")
 
     osm_date = date.fromisoformat(args.osm_date)
     aed_date = date.fromisoformat(args.aed_date)
