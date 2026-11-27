@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import logging
+import math
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,6 +76,57 @@ def read_aed_csv(path):
         unique_rows.append(row)
 
     return rows, unique_rows, duplicate_count
+
+
+def drop_moved_results(path, rows):
+    """좌표가 바뀐 AED(02_refine_location 재배치 등)의 기존 결과를 지운다.
+
+    재실행은 serialSeq로 건너뛰므로, 지우지 않으면 옛 좌표의 등시선이 그대로 남는다.
+    04_load_isochrones는 같은 AED의 결과가 두 줄이면 멈추므로 덧붙이지 않고 파일을 다시 쓴다.
+    """
+    if not path.exists():
+        return 0
+
+    current = {}
+    for row in rows:
+        serial = (row.get("serialSeq") or "").strip()
+        try:
+            current[serial] = (float(row["wgs84Lat"]), float(row["wgs84Lon"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    kept = []
+    dropped = 0
+    with path.open("r", encoding="utf-8") as file:
+        for line in file:
+            try:
+                record = json.loads(line)
+                aed = record.get("aed") or {}
+                serial = str(aed.get("serialSeq") or "")
+                coords = current.get(serial)
+                moved = (
+                    record.get("status") == "success"
+                    and coords is not None
+                    and not (
+                        math.isclose(float(aed["lat"]), coords[0], abs_tol=1e-9)
+                        and math.isclose(float(aed["lon"]), coords[1], abs_tol=1e-9)
+                    )
+                )
+            except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError):
+                moved = False  # 읽을 수 없는 줄은 load_processed_ids의 경고에 맡긴다
+
+            if moved:
+                dropped += 1
+            else:
+                kept.append(line)
+
+    if dropped:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as file:
+            file.writelines(kept)
+        tmp.replace(path)
+
+    return dropped
 
 
 def load_processed_ids(path):
@@ -253,6 +305,11 @@ def main():
 
     if not resume and output_path.exists():
         output_path.unlink()
+
+    if resume:
+        moved = drop_moved_results(output_path, unique_rows)
+        if moved:
+            logging.info("좌표가 바뀐 AED %d건의 기존 결과를 지우고 다시 생성합니다.", moved)
 
     processed = load_processed_ids(output_path) if resume else set()
 

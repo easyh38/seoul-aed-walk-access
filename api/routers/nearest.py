@@ -46,6 +46,7 @@ CANDIDATES_SQL = """
         SELECT ST_Transform(ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), 5179) AS g
     )
     SELECT a.id, a.place, a.address, a.gu,
+           a.location_source, a.location_flags,
            ST_Y(a.geom) AS lat, ST_X(a.geom) AS lon,
            ST_Distance(ST_Transform(a.geom, 5179), p.g) AS straight_m
     FROM aed a, p
@@ -62,6 +63,7 @@ TARGET_SQL = """
         SELECT ST_Transform(ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), 5179) AS g
     )
     SELECT a.id, a.place, a.address, a.gu,
+           a.location_source, a.location_flags,
            ST_Y(a.geom) AS lat, ST_X(a.geom) AS lon,
            ST_Distance(ST_Transform(a.geom, 5179), p.g) AS straight_m
     FROM aed a, p
@@ -82,6 +84,8 @@ def _aed(row: dict, walk: dict | None, statuses: dict[int, str]) -> dict:
         "walk_time_s": None if walk is None else round(walk["time_s"]),
         "walk_distance_m": None if walk is None else round(walk["distance_m"], 1),
         "open_status": statuses.get(row["id"], "unknown"),
+        "location_source": row.get("location_source", "api"),
+        "location_flags": list(row.get("location_flags") or []),
     }
 
 
