@@ -1,0 +1,88 @@
+/* 디자인 토큰 (PRD 6장). 색·모서리·그림자·글꼴·모션 값은 모두 여기서만 정한다.
+   의미 고정: 빨강 = 행동·위험, 초록 = AED·이용 가능. 두 색의 의미를 섞지 않는다. */
+
+:root {
+  /* 6-2 기본 팔레트 */
+  --accent-400: #FF5A5F;
+  --accent-500: #EC3B43;
+  --accent-600: #D62839;
+  --accent-700: #B01E2E;
+  --accent-50: #FFF0F0;
+
+  --aed-100: #E3F6EC;
+  --aed-500: #1FAD66;
+  --aed-600: #178A52;
+
+  --deep-950: #140A0C;
+  --deep-900: #1F0D11;
+  --deep-800: #2E1318;
+  --deep-700: #4A1C24;
+
+  --bg: #F4F4F3;
+  --surface: #FFFFFF;
+  --border: #E8E6E4;
+  --text: #121212;
+  /* PRD 값 #757677은 바탕(--bg) 위에서 대비 4.14:1로 6-9 기준(4.5:1)에 못 미쳐 조금 어둡게 했다 (4.64:1) */
+  --text-muted: #6D6E6F;
+
+  /* 배지 글자색: PRD 값(#178A52 3.89:1, #B25E00 4.21:1)은 6-9 기준(4.5:1) 미달이라 같은 색조로 조금 어둡게 했다 */
+  --st-ok-bg: #E3F6EC;   --st-ok-fg: #147C49;
+  --st-warn-bg: #FFF1E0; --st-warn-fg: #A75800;
+  --st-info-bg: #ECE8FF; --st-info-fg: #5B3FD1;
+  --st-bad-bg: #FFF0F0;  --st-bad-fg: #B01E2E;
+
+  /* 6-2 지도 레이어 색 (JS가 getComputedStyle로 읽는다) */
+  --map-aed: var(--aed-500);
+  --map-aed-closed: #B8B6B4;
+  --map-coverage-fill: var(--aed-500);
+  --map-coverage-line: var(--aed-600);
+  --map-coverage-opacity: 0.20;
+  --map-deadzone-fill: var(--accent-500);
+  --map-deadzone-opacity: 0.18;
+  --map-circle: var(--deep-700);
+  --map-pin: var(--accent-600);
+  --map-route: var(--deep-950);
+  --map-route-casing: #FFFFFF;
+  --map-dest: var(--aed-600);
+
+  /* 6-3 형태 */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 24px;
+  --r-pill: 999px;
+  --shadow-card: 0 1px 2px rgba(18, 18, 18, .04), 0 4px 16px rgba(18, 18, 18, .04);
+  --shadow-pop: 0 8px 32px rgba(18, 18, 18, .12);
+  --gap: 16px;
+  --pad-card: 20px;
+
+  /* 6-6 타이포그래피 (굵기는 400/500/600만) */
+  --font: "Inter Tight", "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo",
+    "Malgun Gothic", Arial, sans-serif;
+  --fs-lead: 24px;   --lh-lead: 30px;
+  --fs-num: 32px;    --lh-num: 36px;
+  --fs-title: 18px;  --lh-title: 24px;
+  --fs-body: 15px;   --lh-body: 22px;
+  --fs-small: 13px;  --lh-small: 18px;
+  --fs-eyebrow: 11px; --lh-eyebrow: 12px;
+
+  /* 6-7 모션 */
+  --t-fast: 150ms;
+  --t-base: 280ms;
+  --t-slow: 500ms;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+
+  /* 레이아웃 */
+  --header-h: 56px;
+  --footer-h: 32px;
+  --panel-w: 380px;
+  --touch: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 0ms;
+    --t-base: 0ms;
+    --t-slow: 0ms;
+  }
+}

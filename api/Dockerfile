@@ -17,4 +17,6 @@ COPY pipeline/hours.py pipeline/availability.py pipeline/analyze_availability.py
 
 EXPOSE 8000
 
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 요청 기록은 Nginx가 쿼리·IP 없이 남긴다. uvicorn 기록에는 /api/nearest?lat=..&lon=..가
+# 그대로 찍히므로 끈다 (PRD 8-6 클릭 좌표 미저장)
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

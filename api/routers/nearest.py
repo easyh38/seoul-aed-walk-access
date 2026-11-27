@@ -7,6 +7,9 @@
 4. 1등 AED까지만 /route를 호출해 경로선(GeoJSON LineString)을 만든다
 5. 1등 + 후보 2개 + straight_first_differs(직선 1등과 도보 1등이 다른지)
 
+aed_id를 주면 후보 검색(2단계) 대신 그 AED 하나까지의 도보 시간과 경로를 돌려준다
+(지도 팝업의 "여기까지 경로 보기"). 이때는 반경 제한과 open_now 필터를 쓰지 않는다.
+
 모든 AED에 지금 시각의 open_status(available / unknown / unavailable)를 붙인다.
 open_now=true면 2단계 후보를 운영 중(available, unknown) AED로만 고른다.
 
@@ -53,6 +56,19 @@ CANDIDATES_SQL = """
 """
 
 
+# aed_id로 고른 AED 하나. 직선거리 계산은 CANDIDATES_SQL과 같다
+TARGET_SQL = """
+    WITH p AS (
+        SELECT ST_Transform(ST_SetSRID(ST_MakePoint(:lon, :lat), 4326), 5179) AS g
+    )
+    SELECT a.id, a.place, a.address, a.gu,
+           ST_Y(a.geom) AS lat, ST_X(a.geom) AS lon,
+           ST_Distance(ST_Transform(a.geom, 5179), p.g) AS straight_m
+    FROM aed a, p
+    WHERE a.id = :aed_id
+"""
+
+
 def _aed(row: dict, walk: dict | None, statuses: dict[int, str]) -> dict:
     """응답용 AED 정보. walk가 None이면 걸어서 갈 수 없는 후보다."""
     return {
@@ -74,8 +90,14 @@ def nearest(
     lat: float = Query(..., ge=-90, le=90, description="클릭한 지점 위도"),
     lon: float = Query(..., ge=-180, le=180, description="클릭한 지점 경도"),
     open_now: bool = Query(False, description="true면 지금(서울 시각) 운영 중인 AED만 후보로"),
+    aed_id: int | None = Query(
+        None, gt=0, description="지정하면 후보 검색 없이 이 AED까지의 경로 (팝업의 '여기까지 경로 보기')"
+    ),
 ):
-    """클릭한 지점에서 걸어서 가장 빨리 닿는 AED, 경로, 다음 후보 2개를 돌려준다."""
+    """클릭한 지점에서 걸어서 가장 빨리 닿는 AED, 경로, 다음 후보 2개를 돌려준다.
+
+    aed_id를 주면 그 AED 하나까지의 경로만 돌려준다 (alternatives는 빈 목록).
+    """
 
     # 1. 서울 안인지
     if not query(INSIDE_SEOUL_SQL, lat=lat, lon=lon)[0]["inside"]:
@@ -84,13 +106,18 @@ def nearest(
             detail="서울시 밖의 지점입니다. 서울시 안을 눌러 주세요.",
         )
 
-    # 2. 직선 1km 안 후보 (직선거리 순)
+    # 2. 직선 1km 안 후보 (직선거리 순). aed_id가 있으면 그 AED 하나
     statuses = statuses_at(now_seoul())
-    ids = [i for i, st in statuses.items() if st in OPEN_STATUSES] if open_now else []
-    candidates = query(
-        CANDIDATES_SQL, lat=lat, lon=lon, radius=SEARCH_RADIUS_M, limit=CANDIDATE_LIMIT,
-        open_only=open_now, ids=ids,
-    )
+    if aed_id is not None:
+        candidates = query(TARGET_SQL, lat=lat, lon=lon, aed_id=aed_id)
+        if not candidates:
+            raise HTTPException(status_code=404, detail="해당 AED를 찾을 수 없습니다.")
+    else:
+        ids = [i for i, st in statuses.items() if st in OPEN_STATUSES] if open_now else []
+        candidates = query(
+            CANDIDATES_SQL, lat=lat, lon=lon, radius=SEARCH_RADIUS_M, limit=CANDIDATE_LIMIT,
+            open_only=open_now, ids=ids,
+        )
     if not candidates:
         which = "지금 운영 중인" if open_now else "등록된"
         raise HTTPException(

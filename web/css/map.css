@@ -1,0 +1,228 @@
+/* 지도 영역: Leaflet 기본 스타일을 토큰으로 덮어쓰고, 배경 타일만 회색조로 만든다 (PRD 6-2, 6-4) */
+
+.map-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+#map {
+  position: absolute;
+  inset: 0;
+  background: #E9E8E6;
+  font-family: var(--font);
+}
+
+/* 배경 타일만 회색조. 레이어·마커 색은 그대로 둔다 */
+.leaflet-tile-pane { filter: grayscale(1) brightness(1.04) contrast(.92); }
+
+/* 클릭을 받지 않는 레이어의 캔버스가 아래 AED 마커 클릭을 가리지 않게 한다
+   (캔버스 한 장이 지도 전체를 덮는다) */
+.leaflet-deadzone-pane canvas,
+.leaflet-coverage-pane canvas,
+.leaflet-circles-pane canvas,
+.leaflet-route-pane canvas,
+.leaflet-dest-pane canvas { pointer-events: none; }
+
+/* 실시간 반영 ON/OFF 때 레이어를 투명도로 바꿔 변화가 보이게 한다 */
+.leaflet-pane.is-fading { opacity: 0; }
+.leaflet-deadzone-pane,
+.leaflet-coverage-pane,
+.leaflet-circles-pane,
+.leaflet-aeds-pane { transition: opacity var(--t-slow) var(--ease); }
+
+/* 출처 표기: 항상 보이게 */
+.leaflet-control-attribution {
+  font-family: var(--font);
+  font-size: 11px;
+  background: rgba(255, 255, 255, .86) !important;
+  border-radius: var(--r-sm) 0 0 0;
+  color: var(--text-muted);
+}
+.leaflet-control-attribution a { color: var(--text); }
+
+/* ------------------------------------------------------------ AED 상세 팝업 */
+
+.leaflet-popup-content-wrapper {
+  padding: 0;
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-pop);
+  border: 1px solid var(--border);
+}
+.leaflet-popup-content {
+  margin: 0;
+  width: 300px !important;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+}
+.leaflet-popup-tip { box-shadow: none; border: 1px solid var(--border); }
+.aed-pop { position: relative; padding: 20px; }
+.aed-pop__close { position: absolute; top: 6px; right: 6px; }
+.aed-pop > * + * { margin-top: 10px; }
+.aed-pop .title { padding-right: 24px; word-break: keep-all; }
+.aed-pop__hours { margin: 0; padding: 0; list-style: none; font-size: var(--fs-small); line-height: var(--lh-small); }
+.aed-pop__hours li { display: flex; gap: 8px; }
+.aed-pop__hours b { flex: none; width: 56px; font-weight: 500; color: var(--text-muted); }
+.aed-pop__status { display: flex; align-items: center; gap: 8px; font-size: var(--fs-small); }
+.aed-pop__actions { display: flex; gap: 8px; padding-top: 4px; }
+.aed-pop__actions .btn { flex: 1; min-height: 40px; padding: 0 12px; font-size: var(--fs-small); }
+
+/* ------------------------------------------------------------ 지도 위 버튼 */
+
+.map-controls {
+  position: absolute;
+  right: 16px;
+  bottom: 40px;
+  z-index: 800;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.map-btn {
+  display: grid;
+  place-items: center;
+  width: var(--touch);
+  height: var(--touch);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  transition: transform var(--t-fast) var(--ease);
+}
+.map-btn:active { transform: scale(.94); }
+.map-btn:hover { color: var(--accent-600); }
+.zoom-group {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.zoom-group .map-btn { border: 0; border-radius: 0; box-shadow: none; }
+.zoom-group .map-btn + .map-btn { border-top: 1px solid var(--border); }
+
+/* ------------------------------------------------------------ 범례 */
+
+.legend {
+  position: absolute;
+  left: 16px;
+  bottom: 28px;
+  z-index: 800;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  max-width: calc(100% - 96px);
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: rgba(255, 255, 255, .94);
+  box-shadow: var(--shadow-card);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+}
+.legend__item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.legend .swatch { width: 16px; height: 16px; border-radius: 4px; }
+.legend .swatch--circle { border-radius: 50%; }
+
+/* ------------------------------------------------------------ 안내·오류 배너, 확대 안내 */
+
+.banner-stack {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(520px, calc(100% - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  pointer-events: auto;
+  animation: rise var(--t-base) var(--ease);
+}
+.banner--info { background: var(--st-info-bg); color: var(--st-info-fg); }
+.banner--ok { background: var(--st-ok-bg); color: var(--st-ok-fg); }
+.banner--bad { background: var(--st-bad-bg); color: var(--st-bad-fg); }
+.banner__text { flex: 1; padding-top: 1px; }
+.banner button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.map-chip {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 800;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  font-size: var(--fs-small);
+  line-height: var(--lh-small);
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------ 사용자 위치 핀 */
+
+.pin-icon { color: var(--map-pin); filter: drop-shadow(0 2px 3px rgba(18, 18, 18, .3)); }
+.pin-icon svg { width: 100%; height: 100%; }
+
+/* ------------------------------------------------------------ 모바일 */
+
+@media (max-width: 767.98px) {
+  /* base.css 위의 .map-wrap { position: relative }를 모바일에서 다시 덮는다 */
+  .map-wrap { position: absolute; inset: 0; }
+  .map-controls { bottom: 128px; right: 12px; }
+  .legend {
+    left: 12px;
+    right: auto;
+    bottom: 124px;
+    max-width: calc(100% - 80px);
+    padding: 8px 10px;
+    gap: 4px 10px;
+  }
+  .banner-stack { top: 72px; }
+  .map-chip { top: 72px; right: 12px; }
+
+  /* 실시간 반영 토글은 지도 위에 떠 있는 버튼으로 (PRD 5장 모바일) */
+  .live-dock.is-floating {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    right: 12px;
+    z-index: 850;
+    flex-direction: row;
+    align-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .live-dock.is-floating .btn { box-shadow: var(--shadow-pop); flex: 1; }
+  .live-dock.is-floating .live-dock__note { display: none; }
+}

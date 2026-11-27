@@ -119,6 +119,31 @@ def test_open_now_no_open_candidates_is_404(fake):
     assert "지금 운영 중인 AED가 없습니다" in res.json()["detail"]
 
 
+def test_aed_id_routes_to_that_aed_only(fake):
+    state, calls = fake
+    state["candidates"] = [_cand(7, 900.0)]
+    state["walks"] = [{"time_s": 700, "distance_m": 1100}]
+    body = client.get("/api/nearest", params={**CITY_HALL, "aed_id": 7}).json()
+
+    assert calls["sql"][-1] == {**CITY_HALL, "aed_id": 7}  # 반경·open_now 검색을 하지 않는다
+    assert body["nearest"]["id"] == 7
+    assert body["nearest"]["walk_time_s"] == 700
+    assert body["alternatives"] == []
+    assert body["straight_first_differs"] is False
+
+
+def test_aed_id_unknown_is_404(fake):
+    state, _ = fake
+    state["candidates"] = []
+    res = client.get("/api/nearest", params={**CITY_HALL, "aed_id": 999999})
+    assert res.status_code == 404
+    assert "AED를 찾을 수 없습니다" in res.json()["detail"]
+
+
+def test_aed_id_must_be_positive(fake):
+    assert client.get("/api/nearest", params={**CITY_HALL, "aed_id": 0}).status_code == 422
+
+
 def test_same_as_straight_first(fake):
     state, _ = fake
     state["walks"] = [{"time_s": 100, "distance_m": 120}, {"time_s": 250, "distance_m": 300},
